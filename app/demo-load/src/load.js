@@ -40,7 +40,13 @@ export function createMetrics() {
     registers: [registry],
   });
 
-  return { registry, loadRequestsTotal, loadRequestDuration };
+  const loadTicksSkipped = new Counter({
+    name: 'load_ticks_skipped_total',
+    help: 'Тики нагрузки, пропущенные из-за занятости concurrency',
+    registers: [registry],
+  });
+
+  return { registry, loadRequestsTotal, loadRequestDuration, loadTicksSkipped };
 }
 
 // Один запрос: исход классифицируется по клиентской стороне.
@@ -87,7 +93,10 @@ export function startLoadLoop({
   let inflight = 0;
   const timer = setInterval(() => {
     if (inflight >= concurrency) {
-      log('warn', 'load_tick_skipped', { inflight, concurrency });
+      // Не warn: при сетевой задержке это ~3 события в секунду, то есть мусор
+      // в Loki. Счётчик показывает то же самое и виден в метриках.
+      metrics.loadTicksSkipped.inc();
+      log('debug', 'load_tick_skipped', { inflight, concurrency });
       return;
     }
     inflight += 1;
@@ -134,9 +143,17 @@ export function createApp({
       return;
     }
     if (pathname === '/metrics') {
-      const body = await metrics.registry.metrics();
-      res.writeHead(200, { 'content-type': metrics.registry.contentType });
-      res.end(body);
+      try {
+        const body = await metrics.registry.metrics();
+        res.writeHead(200, { 'content-type': metrics.registry.contentType });
+        res.end(body);
+      } catch (err) {
+        log('error', 'metrics_failed', { error: err?.message ?? String(err) });
+        if (!res.headersSent) {
+          res.writeHead(500, { 'content-type': 'text/plain; charset=utf-8' });
+        }
+        res.end('metrics failed\n');
+      }
       return;
     }
     res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' });
@@ -164,7 +181,14 @@ function start() {
   }
   const app = createApp({ targetUrl: process.env.TARGET_URL ?? DEFAULT_TARGET_URL });
   app.server.listen(port, () => {
-    app.log('info', 'load_started', { port, rps: DEFAULT_RPS, concurrency: DEFAULT_CONCURRENCY });
+    // Фактические значения: порт берём у сервера (при PORT=0 env врёт), остальное —
+    // дефолты, потому что start() не переопределяет rps/concurrency.
+    app.log('info', 'load_started', {
+      port: app.server.address().port,
+      rps: DEFAULT_RPS,
+      concurrency: DEFAULT_CONCURRENCY,
+      target_url: process.env.TARGET_URL ?? DEFAULT_TARGET_URL,
+    });
   });
   process.on('SIGTERM', () => {
     app.log('info', 'shutdown_started', {});

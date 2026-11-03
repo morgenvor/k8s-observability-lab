@@ -57,6 +57,16 @@ wait_http() { # wait_http <что> <url> [попыток по 0.5 с]
   die "${what} не ответил на ${url} за $((attempts / 2)) с"
 }
 
+# Текст ответа с понятной ошибкой: под `set -e` молчаливое падение curl
+# превращается в «скрипт умер без сообщения».
+fetch_text() { # fetch_text <url> <что>
+  local body
+  if ! body="$(curl -fsS --max-time 5 "$1")"; then
+    die "не удалось получить $2 ($1)"
+  fi
+  printf '%s' "${body}"
+}
+
 assert_contains() { # assert_contains <описание> <текст> <ERE>
   if ! printf '%s' "$2" | grep -Eq "$3"; then
     die "$1: в ответе нет совпадения с /$3/"
@@ -153,11 +163,13 @@ LOAD_URL="http://127.0.0.1:$(host_port "${LOAD}")"
 # --- 3. Эндпоинты demo-api ---------------------------------------------------
 step "demo-api: /healthz, /ready"
 wait_http "demo-api /healthz" "${API_URL}/healthz"
-assert_contains "demo-api /ready" "$(curl -fsS "${API_URL}/ready")" '^ready$'
-curl -fsS -o /dev/null "${API_URL}/work"
+assert_contains "demo-api /ready" "$(fetch_text "${API_URL}/ready" 'готовность demo-api')" '^ready$'
+if ! curl -fsS -o /dev/null "${API_URL}/work"; then
+  die "demo-api не ответил на /work (${API_URL}/work)"
+fi
 
 step "demo-api: /metrics"
-API_METRICS="$(curl -fsS "${API_URL}/metrics")"
+API_METRICS="$(fetch_text "${API_URL}/metrics" 'метрики demo-api')"
 assert_contains "http_requests_total" "${API_METRICS}" '^http_requests_total\{'
 assert_contains "http_request_duration_seconds" "${API_METRICS}" '^http_request_duration_seconds_bucket\{'
 assert_contains "бакет le=\"0.3\"" "${API_METRICS}" 'http_request_duration_seconds_bucket\{[^}]*le="0\.3"'
@@ -179,7 +191,7 @@ if [ "${BEFORE%.*}" -le 0 ]; then
 fi
 
 step "demo-load: /metrics"
-LOAD_METRICS="$(curl -fsS "${LOAD_URL}/metrics")"
+LOAD_METRICS="$(fetch_text "${LOAD_URL}/metrics" 'метрики demo-load')"
 assert_contains "load_requests_total" "${LOAD_METRICS}" '^load_requests_total\{'
 assert_contains "load_request_duration_seconds" "${LOAD_METRICS}" '^load_request_duration_seconds_bucket\{'
 assert_contains "бакет le=\"0.3\" у нагрузки" "${LOAD_METRICS}" 'load_request_duration_seconds_bucket\{[^}]*le="0\.3"'

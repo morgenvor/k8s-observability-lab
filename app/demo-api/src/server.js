@@ -8,6 +8,10 @@ import { createMetrics, statusClass } from './metrics.js';
 
 export const DEFAULT_PORT = 8080;
 export const SHUTDOWN_GRACE_MS = 10_000;
+// Окно дренажа после SIGTERM: сокет ещё принимает соединения и отвечает на /ready
+// 503, чтобы readiness probe и балансировщик успели убрать под из endpoints.
+// Без этого окна новое соединение получает отказ, а не 503.
+export const SHUTDOWN_DRAIN_MS = 2000;
 const WORK_ITERATIONS = 20_000;
 
 // Шаблоны маршрутов: метка `route` в метриках берётся отсюда, а не из URL,
@@ -88,13 +92,16 @@ export function createApp({ logStream = process.stdout, work = syntheticWork } =
         respond(404, 'not found\n');
       }
     } catch (err) {
+      if (!res.headersSent) respond(500, 'internal error\n');
+      // Те же поля, что у http_request: разбор в Loki не должен зависеть от события.
       log('error', 'request_failed', {
         request_id: requestId,
         method: req.method,
         route,
+        status,
+        duration_ms: Math.round(Number(process.hrtime.bigint() - startedAt) / 1e6),
         error: err?.message ?? String(err),
       });
-      if (!res.headersSent) respond(500, 'internal error\n');
     } finally {
       finish();
     }
@@ -120,18 +127,33 @@ function start() {
 
   const app = createApp();
   app.server.listen(port, () => {
-    app.log('info', 'server_started', { port, pid: process.pid });
+    // Фактический порт, а не значение из env: при PORT=0 они разные.
+    app.log('info', 'server_started', { port: app.server.address().port, pid: process.pid });
   });
 
-  // SIGTERM: сначала перестаём быть ready (probe вернёт 503), затем закрываем
-  // соединения; если за 10 с не закрылись — выходим принудительно.
+  // SIGTERM: сначала перестаём быть ready, но сокет не закрываем сразу — иначе
+  // probe получает not-accepted вместо 503 и под выходит из endpoints по ошибке
+  // соединения. Через SHUTDOWN_DRAIN_MS закрываем соединения; если за 10 с они
+  // не закрылись — выходим принудительно.
+  let shuttingDown = false;
   process.on('SIGTERM', () => {
-    app.log('info', 'shutdown_started', { grace_ms: SHUTDOWN_GRACE_MS });
-    app.beginShutdown();
-    app.server.close(() => {
-      app.log('info', 'shutdown_finished', {});
-      process.exit(0);
+    if (shuttingDown) {
+      app.log('warn', 'shutdown_repeated', {});
+      return;
+    }
+    shuttingDown = true;
+    app.log('info', 'shutdown_started', {
+      drain_ms: SHUTDOWN_DRAIN_MS,
+      grace_ms: SHUTDOWN_GRACE_MS,
     });
+    app.beginShutdown();
+    // Таймер дренажа держим «живым»: закрывать сокет раньше срока нельзя.
+    setTimeout(() => {
+      app.server.close(() => {
+        app.log('info', 'shutdown_finished', {});
+        process.exit(0);
+      });
+    }, SHUTDOWN_DRAIN_MS);
     setTimeout(() => {
       app.log('error', 'shutdown_timeout', { grace_ms: SHUTDOWN_GRACE_MS });
       process.exit(1);

@@ -100,3 +100,23 @@ test('/metrics отдаёт load_requests_total и бакет le="0.3"', async (
     app.stop();
   }
 });
+
+test('stop() останавливает цикл: новых прогонов нагрузки нет', async () => {
+  const calls = [];
+  const app = createApp({
+    logStream: { write: () => {} },
+    targetUrl: 'http://upstream.invalid/work',
+    fetchImpl: async () => {
+      calls.push(Date.now());
+      return { ok: true, status: 200, arrayBuffer: async () => new ArrayBuffer(0) };
+    },
+  });
+  app.server.listen(0, '127.0.0.1');
+  await once(app.server, 'listening');
+  await new Promise((resolve) => setTimeout(resolve, 500)); // хотя бы один тик
+  const before = calls.length;
+  assert.ok(before > 0, 'цикл не запустился');
+  app.stop();
+  await new Promise((resolve) => setTimeout(resolve, 500));
+  assert.equal(calls.length, before, 'после stop() цикл продолжает работу');
+});

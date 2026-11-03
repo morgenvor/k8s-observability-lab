@@ -7,14 +7,27 @@ import { test } from 'node:test';
 import { createApp, routeTemplate } from '../src/server.js';
 
 // Возвращает строку метрики по имени и подмножеству меток; 0, если серии нет.
+// Поддерживает и метрики с метками, и «голые» (`http_inflight_requests 1`).
 function metricValue(text, name, labels = {}) {
   let sum = 0;
   for (const line of text.split('\n')) {
-    if (!line.startsWith(`${name}{`)) continue;
-    const labelPart = line.slice(name.length + 1, line.lastIndexOf('}'));
-    const matches = Object.entries(labels).every(([k, v]) => labelPart.includes(`${k}="${v}"`));
-    if (!matches) continue;
-    const value = Number(line.slice(line.lastIndexOf('}') + 1).trim());
+    if (!line.startsWith(name)) continue;
+    const rest = line.slice(name.length);
+    let valueText;
+    if (rest.startsWith('{')) {
+      const close = rest.indexOf('}');
+      if (close < 0) continue;
+      const labelPart = rest.slice(1, close);
+      const matches = Object.entries(labels).every(([k, v]) => labelPart.includes(`${k}="${v}"`));
+      if (!matches) continue;
+      valueText = rest.slice(close + 1);
+    } else if (rest.startsWith(' ')) {
+      if (Object.keys(labels).length > 0) continue;
+      valueText = rest;
+    } else {
+      continue; // например, http_request_duration_seconds_bucket
+    }
+    const value = Number(valueText.trim());
     if (Number.isFinite(value)) sum += value;
   }
   return sum;
@@ -77,7 +90,8 @@ test('404 не увеличивает счётчик успешных ответ
   await withApp(async ({ base }) => {
     await fetch(`${base}/nope`);
     const body = await (await fetch(`${base}/metrics`)).text();
-    assert.equal(metricValue(body, 'http_requests_total', { route: 'other', status_class: '2xx' }), 0);
+    // Отсутствие серии проверяем по тексту: metricValue вернёт 0 и для неё.
+    assert.doesNotMatch(body, /http_requests_total\{[^}]*status_class="2xx"/);
     assert.equal(metricValue(body, 'http_requests_total', { route: 'other', status_class: '4xx' }), 1);
     // Сырой URL в метку не попадает: иначе кардинальность растёт на каждом запросе.
     assert.doesNotMatch(body, /route="\/nope"/);
@@ -122,6 +136,29 @@ test('без X-Request-Id идентификатор запроса генери
       .map((chunk) => JSON.parse(chunk))
       .find((line) => line.msg === 'http_request');
     assert.match(entry.request_id, /^[0-9a-f-]{36}$/);
+  });
+});
+
+test('не-GET запрос получает 405 и учитывается как 4xx по шаблону маршрута', async () => {
+  await withApp(async ({ base }) => {
+    const res = await fetch(`${base}/healthz`, { method: 'POST' });
+    assert.equal(res.status, 405);
+    assert.equal(res.headers.get('allow'), 'GET');
+    await res.text();
+    const body = await (await fetch(`${base}/metrics`)).text();
+    assert.equal(
+      metricValue(body, 'http_requests_total', { route: '/healthz', status_class: '4xx' }),
+      1,
+    );
+  });
+});
+
+test('http_inflight_requests возвращается к базе после запросов', async () => {
+  await withApp(async ({ base }) => {
+    await Promise.all(Array.from({ length: 5 }, () => fetch(`${base}/work`)));
+    const body = await (await fetch(`${base}/metrics`)).text();
+    // В момент скрейпа в полёте только он сам, поэтому база = 1, а не 0.
+    assert.equal(metricValue(body, 'http_inflight_requests'), 1);
   });
 });
 

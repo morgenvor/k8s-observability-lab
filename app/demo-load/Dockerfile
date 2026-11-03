@@ -9,6 +9,6 @@ FROM node:22-alpine AS runtime
 ENV NODE_ENV=production
 WORKDIR /app
 COPY --from=build --chown=node:node /app /app
-USER node
+USER 1000:1000
 EXPOSE 8080
 CMD ["node", "src/load.js"]
