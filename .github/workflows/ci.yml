@@ -1,0 +1,50 @@
+# Офлайн-ворота проекта. Реальный прогон возможен только после push владельцем
+# (правило 3 AGENTS: публикация — действие владельца); локальный эквивалент —
+# ./scripts/check.sh и ./scripts/check.sh --images.
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    name: offline checks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install lint tooling
+        run: python3 -m pip install --quiet yamllint
+      - name: Install pinned tools
+        run: ./scripts/bootstrap-tools.sh
+      - name: Offline checks
+        run: ./scripts/check.sh
+
+  images:
+    name: docker build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build app images (registry не используется, push не нужен)
+        shell: bash
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          found=0
+          for dockerfile in app/*/Dockerfile; do
+            app_dir="$(dirname "${dockerfile}")"
+            name="$(basename "${app_dir}")"
+            echo "--- ${name}"
+            docker build -t "${name}:ci" "${app_dir}"
+            found=1
+          done
+          if [ "${found}" -eq 0 ]; then
+            echo "нет app/*/Dockerfile — собирать нечего (появятся в фазе 1)"
+          fi

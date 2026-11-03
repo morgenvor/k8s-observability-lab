@@ -1,0 +1,24 @@
+# Инструменты и загрузки bootstrap-tools.sh (восстанавливаются скриптом)
+.tools/
+.tmp/
+
+# Node
+node_modules/
+npm-debug.log*
+
+# Образы и архивы
+*.tar
+*.tgz
+*.tar.gz
+
+# Локальная конфигурация и доступ к лабе (kubeconfig живёт вне репозитория)
+.env
+kubeconfig*
+*.kubeconfig
+
+# Логи в корне; evidence/*.console.log — доказательства и трекаются
+/*.log
+
+# ОС
+.DS_Store
+Thumbs.db

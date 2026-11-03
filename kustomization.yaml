@@ -1,0 +1,19 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+# Свои манифесты проекта одним `kubectl apply -k .`.
+# resources наполняются по фазам плана v1.0: deploy/base — фаза 2 (namespace demo,
+# приложения), rules — фаза 3 (PrometheusRule). До этого список пуст: рендер валиден
+# и ничего не создаёт.
+resources: []
+
+# Теги образов проставляет scripts/deploy.sh (kustomize edit set image) под текущий
+# git SHA; в git хранится заглушка local, чтобы файл не менялся при каждом деплое.
+images:
+  - name: demo-api
+    newTag: local
+  - name: demo-load
+    newTag: local
+  - name: alert-sink
+    newTag: local
+  - name: toxiproxy
+    newTag: local

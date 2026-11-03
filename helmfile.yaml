@@ -1,0 +1,18 @@
+# Сторонние чарты проекта в одной точке. Свои манифесты (deploy/, rules/) — kustomize,
+# см. kustomization.yaml. Версии чартов пинятся здесь; смена версии — отдельный шаг
+# с записью в CHANGELOG.md, а не «заодно обновим».
+repositories:
+  - name: prometheus-community
+    url: https://prometheus-community.github.io/helm-charts
+
+releases:
+  # Стек мониторинга лабы: уже развёрнут (rev5), values принадлежат проекту.
+  # Локальная проверка без кластера: helmfile template -l name=monitoring
+  - name: monitoring
+    namespace: monitoring
+    createNamespace: false
+    chart: prometheus-community/kube-prometheus-stack
+    version: 92.14.1
+    values:
+      - helm/values/kps.yaml
+    # Loki и Alloy добавляются в фазе 5 плана v1.0 (SingleBinary + DaemonSet).
