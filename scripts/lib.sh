@@ -22,7 +22,7 @@ use_tools() {
 }
 
 need_cmd() {
-  command -v "$1" >/dev/null 2>&1 || die "нет команды '$1' (см. docs/runbook.md)"
+  command -v "$1" >/dev/null 2>&1 || die "нет команды '$1' (нужные инструменты ставит scripts/bootstrap-tools.sh)"
 }
 
 # Проверяет, что инструменты уже скачаны; иначе подсказывает bootstrap.

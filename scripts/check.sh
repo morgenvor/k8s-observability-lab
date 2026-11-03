@@ -38,8 +38,12 @@ if command -v yamllint >/dev/null 2>&1; then
       -path '*/node_modules' -prune -o \
       \( -name '*.yaml' -o -name '*.yml' \) -print | sort
   )
-  yamllint -d '{extends: relaxed, rules: {line-length: {max: 120}}}' "${YAML_FILES[@]}"
-  printf 'проверено файлов: %d\n' "${#YAML_FILES[@]}"
+  if [ "${#YAML_FILES[@]}" -gt 0 ]; then
+    yamllint -d '{extends: relaxed, rules: {line-length: {max: 120}}}' "${YAML_FILES[@]}"
+    printf 'проверено файлов: %d\n' "${#YAML_FILES[@]}"
+  else
+    SKIPPED+=("yamllint (в дереве нет .yaml/.yml)")
+  fi
 else
   SKIPPED+=("yamllint (не установлен)")
 fi
@@ -106,25 +110,34 @@ fi
 # --- 7. Образы приложений (по флагу) ----------------------------------------
 if [ "${WITH_IMAGES}" -eq 1 ]; then
   step "docker build"
-  need_cmd docker
   shopt -s nullglob
-  for dockerfile in app/*/Dockerfile; do
-    app_dir="$(dirname "${dockerfile}")"
-    name="$(basename "${app_dir}")"
-    printf -- '--- %s\n' "${name}"
-    docker build -t "${name}:check" "${app_dir}"
-  done
+  DOCKERFILES=(app/*/Dockerfile)
   shopt -u nullglob
+  if [ "${#DOCKERFILES[@]}" -eq 0 ]; then
+    SKIPPED+=("docker build (нет app/*/Dockerfile)")
+  else
+    need_cmd docker
+    for dockerfile in "${DOCKERFILES[@]}"; do
+      app_dir="$(dirname "${dockerfile}")"
+      name="$(basename "${app_dir}")"
+      printf -- '--- %s\n' "${name}"
+      docker build -t "${name}:check" "${app_dir}"
+    done
+  fi
 fi
 
-# --- 8. Секреты и лабораторные адреса в трекаемых файлах --------------------
+# --- 8. Секреты и лабораторные адреса в файлах, которые попадут в git --------
+# Сканируем ровно публикуемый набор: трекаемые файлы + untracked, не покрытые
+# ignore. Внутренние документы (.dsh/, AGENTS.md, CHANGELOG.md) исключены локальным
+# .git/info/exclude и намеренно содержат hostname лабы — их в git нет.
 step "скан секретов и адресов"
-if grep -rInE \
-  --exclude-dir=.git --exclude-dir=.tools --exclude-dir=.tmp --exclude-dir=node_modules \
-  --exclude='*.tar' --exclude='*.tgz' --exclude='*.gz' \
-  '192\.168\.252\.|BEGIN [A-Z ]*PRIVATE KEY|ghp_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|xox[abprs]-|AKIA[0-9A-Z]{16}' \
-  . ; then
-  die "найдены секреты или лабораторные адреса в трекаемых файлах (см. вывод выше)"
+mapfile -d '' -t SCAN_FILES < <(git ls-files -z --cached --others --exclude-standard)
+if [ "${#SCAN_FILES[@]}" -eq 0 ]; then
+  SKIPPED+=("скан секретов (git не видит файлов)")
+elif grep -nIE \
+  '192\.168\.252\.|BEGIN [A-Z ]*PRIVATE KEY|ghp_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|xox[abprs]-|AKIA[0-9A-Z]{16}|k8s[-]server|k8s[-]agent' \
+  -- "${SCAN_FILES[@]}" ; then
+  die "найдены секреты, адреса или hostname лабы в файлах, которые попадут в git"
 fi
 
 # --- Итог -------------------------------------------------------------------
