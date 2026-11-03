@@ -1,0 +1,91 @@
+# Values kube-prometheus-stack для лабы (окно Boutique 2026-10-28).
+# 2026-11-03: перенесён из proxmox-lab/k8s/monitoring/values-kps-small.yaml
+# (каталог лабы удалён); retention 24h→72h, Boutique удалён.
+# Состав ПОЛНЫЙ (prometheus+grafana+alertmanager — ничего не выключаем upfront),
+# ужаты только retention/storage/интервалы/ресурсы. Пин чарта: 92.14.1.
+# Порядок урезания при красных замерах — см. план окна (retention→лимиты→alertmanager).
+# Источник дефолтов: prometheus-community/kube-prometheus-stack 92.14.1 (values.yaml).
+
+prometheus:
+  enabled: true
+  prometheusSpec:
+    # 2026-11-03: 24h→72h — окно SLO 3 дня (медленный burn rate 1x/3d)
+    # влезает в тот же PVC 5Gi; retentionSize остаётся вторым ограничителем.
+    retention: 72h
+    retentionSize: 5GB
+    scrapeInterval: 30s
+    evaluationInterval: 30s
+    storageSpec:
+      volumeClaimTemplate:
+        spec:
+          accessModes: ["ReadWriteOnce"]
+          resources:
+            requests:
+              storage: 5Gi
+    resources:
+      requests:
+        cpu: 250m
+        memory: 768Mi
+      limits:
+        cpu: 1000m
+        memory: 1536Mi
+
+grafana:
+  enabled: true
+  # 2026-10-28: limits подняты 256Mi→512Mi→768Mi — факт OOMKilled x6 за 3ч
+  # (Grafana 13.2.4-distroless живьём ест ~400Mi в покое и ~600Mi+ после старта
+  # со скрейпом всех targets; 512Mi тоже впритык). Запас на ноде есть
+  # (server avail ~1,6Gi). Пересмотр — при долгом удержании.
+  resources:
+    requests:
+      cpu: 50m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 768Mi
+
+alertmanager:
+  enabled: true
+  alertmanagerSpec:
+    retention: 24h
+    storage:
+      volumeClaimTemplate:
+        spec:
+          accessModes: ["ReadWriteOnce"]
+          resources:
+            requests:
+              storage: 2Gi
+    resources:
+      requests:
+        cpu: 25m
+        memory: 64Mi
+      limits:
+        cpu: 100m
+        memory: 128Mi
+
+prometheusOperator:
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 200m
+      memory: 256Mi
+
+kubeStateMetrics:
+  resources:
+    requests:
+      cpu: 25m
+      memory: 64Mi
+    limits:
+      cpu: 100m
+      memory: 128Mi
+
+nodeExporter:
+  resources:
+    requests:
+      cpu: 25m
+      memory: 32Mi
+    limits:
+      cpu: 100m
+      memory: 64Mi
