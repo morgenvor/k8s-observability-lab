@@ -40,13 +40,29 @@ for image in "${IMAGES[@]}"; do
     || die "нет локального образа ${image}; сначала ./scripts/build-image.sh"
 done
 
+# docker save пишет tar в stdout, ssh отдаёт его в stdin `k3s ctr images import -`.
+# Стрим не создаёт временный tarball на диске и не требует места под образ.
+import_to_node() {
+  local node="$1"
+  docker save "${IMAGES[@]}" \
+    | ssh -F "${SSH_CONFIG}" "${SSH_OPTS[@]}" "${node}" 'sudo -n k3s ctr images import -' >/dev/null
+}
+
 for node in "${NODES[@]}"; do
   info "импорт в ${node}: ${IMAGES[*]}"
-  # docker save пишет tar в stdout, ssh отдаёт его в stdin `k3s ctr images import -`.
-  # Стрим не создаёт временный tarball на диске и не требует места под образ.
-  docker save "${IMAGES[@]}" \
-    | ssh -F "${SSH_CONFIG}" "${SSH_OPTS[@]}" "${node}" 'sudo -n k3s ctr images import -' >/dev/null \
-    || die "импорт в ${node} не удался: проверь ssh-алиас ноды в LAB_SSH_CONFIG и sudo на ноде"
+  if ! import_to_node "${node}"; then
+    # Первый импорт нового образа даёт пик записи на диск, и на control-plane от него
+    # перезапускается k3s (embedded etcd теряет лидерство — факт лабы 2026-11-03,
+    # `../proxmox-lab/CHANGELOG.md`). Это не ошибка ssh/прав: ждём, пока API ответит,
+    # и повторяем один раз — блобы уже в content store, повтор идёт быстро.
+    warn "импорт в ${node} не удался; жду кластер и повторяю один раз (см. CHANGELOG лабы)"
+    for _ in $(seq 1 30); do
+      kubectl get nodes --request-timeout=5s >/dev/null 2>&1 && break
+      sleep 2
+    done
+    import_to_node "${node}" \
+      || die "импорт в ${node} не удался и при повторе: проверь ssh-алиас ноды, sudo и состояние k3s на ноде"
+  fi
 done
 
 # Проверка после импорта: тег виден в containerd на каждой ноде.
