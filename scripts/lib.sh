@@ -72,7 +72,7 @@ render_demo_manifests() {
   {
     printf 'apiVersion: kustomize.config.k8s.io/v1beta1\nkind: Kustomization\n'
     # LoadRestrictionsNone нужен ниже: оверлей в .tmp ссылается на deploy/ в корне.
-    printf 'resources:\n  - ../../deploy/base\n  - ../../deploy/dashboards\n'
+    printf 'resources:\n  - ../../deploy/base\n  - ../../deploy/dashboards\n  - ../../rules\n'
     printf 'images:\n'
     # Список образов — из app/*/Dockerfile, как в build-image.sh/import-image.sh:
     # иначе новый сервис (alert-sink в фазе 4) отрендерился бы с заглушкой :local.

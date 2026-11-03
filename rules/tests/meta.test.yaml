@@ -1,0 +1,30 @@
+# Юнит-тесты мета-алертов (promtool test rules).
+#
+# Здесь грузится ТОЛЬКО meta.yaml: так моделируется ситуация, которую ловит
+# SloRulesAbsent — PrometheusRule demo-slo не загружен (или его группа падает),
+# и записанных серий slo:* в Prometheus нет. Если грузить demo-slo.yaml вместе
+# с meta.yaml, тест проверял бы обратное: правило живо и молчит.
+rule_files:
+  - ../../.tmp/rendered/rulefiles/meta.yaml
+evaluation_interval: 1m
+
+tests:
+  - name: "SLO-правил нет: SloRulesAbsent загорается"
+    interval: 1m
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: SloRulesAbsent
+        exp_alerts:
+          - exp_labels:
+              severity: page
+              service: demo-api
+              namespace: demo
+            exp_annotations:
+              summary: "SLO-правила demo не вычисляются в Prometheus"
+              description: >-
+                Серии slo:demo_availability:ratio_5m или slo:demo_latency:ratio_5m
+                отсутствуют дольше 10 минут: PrometheusRule demo-slo не загружен
+                (нет метки release=monitoring?), группа падает на вычислении или
+                оператор ещё не перезагрузил правило. Пока это так, burn-rate
+                алерты по SLO молчат — тишина не означает «всё хорошо».
+              runbook_url: "docs/runbook.md"

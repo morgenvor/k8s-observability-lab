@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 # Откат демо-контура: удаляет объекты из того же рендера, что и scripts/deploy.sh.
-# Удаление namespace demo уносит поды/сервисы/ServiceMonitor; дашборд в monitoring
-# удаляется отдельным объектом. Образы в containerd остаются — они безвредны.
+# Удаление namespace demo уносит поды/сервисы/ServiceMonitor; объекты в monitoring
+# (дашборды demo-red, slo-demo и PrometheusRule demo-*) удаляются отдельно.
+# Внимание: вместе с правилами уходит и SLO-оповещение, включая SloRulesAbsent.
+# Образы в containerd остаются — они безвредны.
 # Использование: ./scripts/rollback.sh [--yes]
 set -euo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
@@ -11,7 +13,7 @@ ASSUME_YES=0
 for arg in "$@"; do
   case "${arg}" in
     --yes|-y) ASSUME_YES=1 ;;
-    -h|--help) sed -n '2,6p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help) sed -n '2,7p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) die "неизвестный флаг: ${arg} (см. --help)" ;;
   esac
 done
@@ -24,7 +26,7 @@ RENDERED="$(render_demo_manifests "${TAG}")"
 
 if [ "${ASSUME_YES}" -ne 1 ]; then
   [ -t 0 ] || die "нет интерактивного ввода (stdin не tty): для неинтерактивного запуска используй --yes"
-  warn "будут удалены namespace demo (все поды/сервисы демо-контура) и дашборд demo-red в monitoring"
+  warn "будут удалены namespace demo (поды/сервисы демо-контура), дашборды demo-red и slo-demo, PrometheusRule demo-slo/demo-slo-alerts/demo-infra/demo-meta в monitoring"
   printf 'Продолжить? [y/N] '
   # || answer="": при EOF read возвращает 1 и под set -e скрипт падал бы без сообщения
   read -r answer || answer=""
@@ -38,4 +40,4 @@ kubectl delete --ignore-not-found -f "${RENDERED}"
 # Удаление namespace асинхронно: без ожидания следующий deploy.sh может упереться
 # в ещё Terminating namespace. Дашборд удаляется отдельным объектом и ждать не нужно.
 kubectl wait --for=delete ns/demo --timeout=120s >/dev/null 2>&1 || true
-info "демо-контур удалён (образы в containerd остались, кластер monitoring не тронут)"
+info "демо-контур, дашборды и правила удалены (образы в containerd остались)"

@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Доставка демо-контура в k3s лабы: рендер kustomize с тегами образов и один apply.
-# Живое действие: создаёт namespace demo и объекты в monitoring (дашборды).
+# Живое действие: создаёт namespace demo и объекты в monitoring (дашборды и
+# PrometheusRule с правилами SLI/SLO, инфраструктурными и мета-алертами).
 # Использование: ./scripts/deploy.sh
 # Env: IMAGE_TAG (иначе короткий git SHA), KUBECONFIG (иначе kubeconfig лабы),
 #      WAIT_TARGETS (секунды ожидания targets, по умолчанию 180)
@@ -32,7 +33,7 @@ shopt -u nullglob
 info "рендер манифестов (тег ${TAG})"
 RENDERED="$(render_demo_manifests "${TAG}")"
 
-info "kubectl apply (namespace demo + демо-объекты + дашборд в monitoring)"
+info "kubectl apply (namespace demo + демо-объекты + дашборды и правила в monitoring)"
 kubectl apply -f "${RENDERED}"
 
 info "ожидание rollout"
@@ -96,6 +97,37 @@ done
 awk "BEGIN{exit !(${ok_rate:-0} > 0)}" \
   || die "нагрузка не доходит до demo-api: rate(load_requests_total{outcome=\"ok\"}) = ${ok_rate:-0}; проверь toxiproxy (прокси demo-api:12001 → demo-api:8080) и TARGET_URL"
 info "цели живы (demo-api ${api_up}, demo-load ${load_up}), ok-трафик ${ok_rate} rps"
+
+# Правила приезжают тем же apply, но подхватывает их оператор: без этой проверки
+# PrometheusRule без метки release=monitoring или с падающей группой доехал бы
+# молча — цели остались бы up=1, а правил бы не было. Проверяются ВСЕ группы
+# проекта (метрика Prometheus про факт вычисления), а не только записанные серии:
+# иначе отсутствие demo-slo-alerts/demo-infra/demo-meta прошло бы незамеченным.
+# 7 — число групп в rules/ (demo-slo 2, demo-slo-alerts 2, demo-infra 2, demo-meta 1);
+# при изменении состава правил поправь число или задай RULE_GROUPS_EXPECTED.
+RULE_GROUPS_EXPECTED="${RULE_GROUPS_EXPECTED:-7}"
+info "ожидание правил проекта в Prometheus (до 120 с, групп: ${RULE_GROUPS_EXPECTED})"
+rules_deadline=$((SECONDS + 120))
+groups=""
+while [ "${SECONDS}" -lt "${rules_deadline}" ]; do
+  groups="$(prom_scalar 'count(prometheus_rule_group_last_evaluation_timestamp_seconds{rule_group=~".*;demo-.*"})')"
+  if [ "${groups:-0}" -ge "${RULE_GROUPS_EXPECTED}" ]; then
+    break
+  fi
+  sleep 5
+done
+[ "${groups:-0}" -ge "${RULE_GROUPS_EXPECTED}" ] \
+  || die "правил проекта в Prometheus ${groups:-0} из ${RULE_GROUPS_EXPECTED} групп: PrometheusRule не подхватились (метка release=monitoring?) или группа падает — смотри /api/v1/rules и поле lastError"
+info "правила проекта загружены: групп ${groups}"
+
+info "проверка записанных серий SLI"
+av="$(prom_scalar 'count(slo:demo_availability:ratio_5m) or vector(0)')"
+lat="$(prom_scalar 'count(slo:demo_latency:ratio_5m) or vector(0)')"
+[ "${av:-0}" = "1" ] \
+  || die "серии slo:demo_availability:ratio_5m нет, хотя группа loaded: проверь выражение записи в rules/demo-slo.yaml"
+[ "${lat:-0}" = "1" ] \
+  || die "серии slo:demo_latency:ratio_5m нет, хотя группа loaded: проверь выражение записи в rules/demo-slo.yaml"
+info "серии SLI пишутся (availability и latency)"
 
 info "headroom нод"
 kubectl top nodes || warn "kubectl top недоступен (metrics-server?), проверь вручную"

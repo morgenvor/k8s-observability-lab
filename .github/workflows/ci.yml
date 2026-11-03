@@ -21,7 +21,8 @@ jobs:
         with:
           node-version: '22'
       - name: Install lint tooling
-        run: python3 -m pip install --quiet yamllint
+        # pyyaml нужен шагу выгрузки PrometheusRule -> rulefiles в scripts/check.sh
+        run: python3 -m pip install --quiet yamllint pyyaml
       - name: Install pinned tools
         run: ./scripts/bootstrap-tools.sh
       - name: Offline checks

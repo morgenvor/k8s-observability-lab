@@ -1,0 +1,142 @@
+# Burn-rate алерты по SLO демо-сервиса (фаза 3).
+#
+# Мультиоконная схема (Google SRE workbook): быстрый алерт требует превышения
+# порога в коротком И в длинном окне одновременно. Короткое окно даёт быструю
+# реакцию, длинное отсекает короткие всплески, которые не съедят бюджет.
+#
+#   Fast   (page)  : 14,4x в 5m и 1h  — за час уходит ~20 % бюджета, реакция сейчас
+#   Medium (ticket): 6x в 30m и 6h    — за 6 часов уходит ~50 % бюджета, тикет
+#   Slow   (ticket): 1x в 3d          — бюджет сгорает за окно SLO, плановая работа
+#
+# Доля бюджета за окно = множитель × длительность окна / окно SLO; от самой цели
+# (99 % или 95 %) она не зависит. Здесь окно SLO 3 дня (72 ч), поэтому 14,4x за час
+# съедает ~20 % бюджета, 6x за 6 часов — ~50 %, а 1x за 3 дня — все 100 %.
+# Множители 14,4/6/1 взяты из SRE-workbook, где проценты посчитаны для 30-дневного
+# окна (там 14,4x за час — 2 %); у нас окно в 10 раз короче, и те же множители
+# означают в 10 раз большую долю бюджета. Порог чувствительнее «книжного» — page
+# приходит примерно через 8–9 минут полного отказа.
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: demo-slo-alerts
+  namespace: monitoring
+  labels:
+    release: monitoring
+    app.kubernetes.io/name: demo-slo-alerts
+    app.kubernetes.io/part-of: k8s-observability-lab
+spec:
+  groups:
+    - name: demo-slo.alerts.availability
+      rules:
+        - alert: SloDemoAvailabilityBurnFast
+          expr: |
+            slo:demo_availability:burn_rate_5m > 14.4
+            and
+            slo:demo_availability:burn_rate_1h > 14.4
+          for: 2m
+          labels:
+            severity: page
+            service: demo-api
+            namespace: demo
+            slo: availability
+          annotations:
+            summary: "demo-api: быстрый расход бюджета доступности (SLO 99 %)"
+            description: >-
+              Доступность demo-api тратит бюджет ошибок со скоростью
+              {{ $value | printf "%.1f" }}x (порог 14,4x в окнах 5m и 1h).
+              При 14,4x за час уходит ~20 % трёхдневного бюджета. Смотри долю
+              не-ok в demo-load и состояние toxiproxy: чаще всего это сетевой
+              сбой или недоступный demo-api.
+            runbook_url: "docs/drills.md"
+            dashboard_url: "/d/demo-slo"
+        - alert: SloDemoAvailabilityBurnMedium
+          expr: |
+            slo:demo_availability:burn_rate_30m > 6
+            and
+            slo:demo_availability:burn_rate_6h > 6
+          for: 15m
+          labels:
+            severity: ticket
+            service: demo-api
+            namespace: demo
+            slo: availability
+          annotations:
+            summary: "demo-api: устойчивый расход бюджета доступности (SLO 99 %)"
+            description: >-
+              Burn rate доступности выше 6x в окнах 30m и 6h: за 6 часов такого
+              расхода уходит ~50 % бюджета. Нужен тикет на разбор, а не
+              немедленная реакция.
+            runbook_url: "docs/drills.md"
+            dashboard_url: "/d/demo-slo"
+        - alert: SloDemoAvailabilityBurnSlow
+          expr: slo:demo_availability:burn_rate_3d > 1
+          for: 1h
+          labels:
+            severity: ticket
+            service: demo-api
+            namespace: demo
+            slo: availability
+          annotations:
+            summary: "demo-api: бюджет доступности сгорает за окно SLO (99 %)"
+            description: >-
+              За 3 дня расход бюджета превышает 1x: при таких темпах бюджет 1 %
+              закончится к концу окна SLO. Плановая работа с SLO, не инцидент:
+              посмотри, какие маршруты и клиенты дают не-ok.
+            runbook_url: "docs/drills.md"
+            dashboard_url: "/d/demo-slo"
+
+    - name: demo-slo.alerts.latency
+      rules:
+        - alert: SloDemoLatencyBurnFast
+          expr: |
+            slo:demo_latency:burn_rate_5m > 14.4
+            and
+            slo:demo_latency:burn_rate_1h > 14.4
+          for: 2m
+          labels:
+            severity: page
+            service: demo-api
+            namespace: demo
+            slo: latency
+          annotations:
+            summary: "demo-api: быстрый расход бюджета латентности (SLO 95 % / 300 мс)"
+            description: >-
+              Доля запросов медленнее 300 мс растёт: burn rate
+              {{ $value | printf "%.1f" }}x (порог 14,4x в окнах 5m и 1h) при
+              бюджете 5 %. Проверь латентность клиента demo-load и toxiproxy:
+              дрилл latency добавляет задержку на прокси, а не в приложении.
+            runbook_url: "docs/drills.md"
+            dashboard_url: "/d/demo-slo"
+        - alert: SloDemoLatencyBurnMedium
+          expr: |
+            slo:demo_latency:burn_rate_30m > 6
+            and
+            slo:demo_latency:burn_rate_6h > 6
+          for: 15m
+          labels:
+            severity: ticket
+            service: demo-api
+            namespace: demo
+            slo: latency
+          annotations:
+            summary: "demo-api: устойчивый расход бюджета латентности (SLO 95 %)"
+            description: >-
+              Burn rate латентности выше 6x в окнах 30m и 6h: медленных запросов
+              стабильно больше, чем позволяет бюджет 5 %. Тикет на разбор.
+            runbook_url: "docs/drills.md"
+            dashboard_url: "/d/demo-slo"
+        - alert: SloDemoLatencyBurnSlow
+          expr: slo:demo_latency:burn_rate_3d > 1
+          for: 1h
+          labels:
+            severity: ticket
+            service: demo-api
+            namespace: demo
+            slo: latency
+          annotations:
+            summary: "demo-api: бюджет латентности сгорает за окно SLO (95 %)"
+            description: >-
+              За 3 дня расход бюджета латентности выше 1x: при таких темпах
+              бюджет 5 % закончится к концу окна. Плановая работа с SLO.
+            runbook_url: "docs/drills.md"
+            dashboard_url: "/d/demo-slo"

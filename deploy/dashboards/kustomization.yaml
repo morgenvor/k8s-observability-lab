@@ -15,6 +15,16 @@ configMapGenerator:
         # Папку sidecar учитывает только при folderAnnotation в values Grafana;
         # без этого дашборд попадёт в общую папку (см. CHANGELOG).
         grafana_folder: demo
+  # SLO-дашборд (фаза 3): бюджеты, burn rate по окнам, текущий SLI.
+  - name: slo-demo
+    files:
+      - slo-demo.json
+    options:
+      labels:
+        grafana_dashboard: "1"
+        app.kubernetes.io/part-of: k8s-observability-lab
+      annotations:
+        grafana_folder: demo
 
 # Имя ConfigMap без хеша: так его ждёт sidecar и так проще искать глазами.
 generatorOptions:

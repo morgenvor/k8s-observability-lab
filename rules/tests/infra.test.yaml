@@ -1,0 +1,120 @@
+# Юнит-тесты инфраструктурных алертов (promtool test rules).
+#
+# Проверяются только правила проекта: KubePodOOMKilled и NodeMemoryAvailableLow.
+# Остальная инфраструктура делегирована чарту kube-prometheus-stack (перечень —
+# в шапке rules/infra.yaml); тестировать здесь правила чарта смысла нет.
+#
+# Метки подов и узлов синтетические (node-a, 10.0.0.10): трекаемые файлы не
+# содержат hostname лабы.
+rule_files:
+  - ../../.tmp/rendered/rulefiles/infra.yaml
+evaluation_interval: 1m
+
+tests:
+  - name: "OOMKilled: под убит по памяти"
+    interval: 1m
+    input_series:
+      - series: 'kube_pod_container_status_last_terminated_reason{namespace="demo",pod="demo-api-1",container="demo-api",reason="OOMKilled"}'
+        values: '1+0x20'
+      - series: 'kube_pod_container_status_last_terminated_reason{namespace="demo",pod="demo-api-1",container="demo-api",reason="Error"}'
+        values: '0+0x20'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: KubePodOOMKilled
+        exp_alerts:
+          - exp_labels:
+              severity: ticket
+              namespace: demo
+              pod: demo-api-1
+              container: demo-api
+              reason: OOMKilled
+            exp_annotations:
+              summary: "Под demo-api-1: контейнер demo-api убит по OOM"
+              description: >-
+                Последнее завершение контейнера — OOMKilled: лимит памяти меньше
+                фактического потребления. Если сейчас идёт дрилл OOMKilled —
+                ожидаемо; иначе проверь limits пода и график рабочего набора,
+                а не только факт рестарта.
+              runbook_url: "docs/drills.md"
+
+  - name: "свободно меньше 15 % памяти: NodeMemoryAvailableLow"
+    interval: 1m
+    input_series:
+      - series: 'node_memory_MemAvailable_bytes{instance="10.0.0.10:9100",job="node-exporter"}'
+        values: '1000000000+0x30'
+      - series: 'node_memory_MemTotal_bytes{instance="10.0.0.10:9100",job="node-exporter"}'
+        values: '8000000000+0x30'
+    alert_rule_test:
+      - eval_time: 25m
+        alertname: NodeMemoryAvailableLow
+        exp_alerts:
+          - exp_labels:
+              severity: ticket
+              instance: 10.0.0.10:9100
+              job: node-exporter
+            exp_annotations:
+              summary: "Узел 10.0.0.10:9100: свободно меньше 15 % памяти"
+              description: >-
+                node-exporter: MemAvailable ниже 15 % от MemTotal дольше 10 минут.
+                Для лабы это граница headroom: следующая раскатка подов может
+                упереться в память. Самый поздний случай (меньше 10 % свободной
+                памяти) покрывает правило чарта NodeMemoryHighUtilization.
+              runbook_url: "docs/runbook.md"
+
+  - name: "всё здорово: инфраструктурные алерты молчат"
+    interval: 1m
+    input_series:
+      - series: 'kube_pod_container_status_last_terminated_reason{namespace="demo",pod="demo-api-1",container="demo-api",reason="OOMKilled"}'
+        values: '0+0x30'
+      - series: 'node_memory_MemAvailable_bytes{instance="10.0.0.10:9100",job="node-exporter"}'
+        values: '4000000000+0x30'
+      - series: 'node_memory_MemTotal_bytes{instance="10.0.0.10:9100",job="node-exporter"}'
+        values: '8000000000+0x30'
+      - series: 'kubelet_volume_stats_used_bytes{persistentvolumeclaim="prometheus-db",job="kubelet"}'
+        values: '1000000000+0x30'
+      - series: 'kubelet_volume_stats_capacity_bytes{persistentvolumeclaim="prometheus-db",job="kubelet"}'
+        values: '5000000000+0x30'
+      - series: 'kubelet_volume_stats_used_bytes{persistentvolumeclaim="empty-db",job="kubelet"}'
+        values: '0+0x30'
+      - series: 'kubelet_volume_stats_capacity_bytes{persistentvolumeclaim="empty-db",job="kubelet"}'
+        values: '0+0x30'
+    alert_rule_test:
+      - eval_time: 40m
+        alertname: KubePodOOMKilled
+        exp_alerts: []
+      - eval_time: 40m
+        alertname: NodeMemoryAvailableLow
+        exp_alerts: []
+      # PVC с нулевой ёмкостью не должен давать вечный алерт (used/0 = +Inf).
+      - eval_time: 40m
+        alertname: PVCNearlyFull
+        exp_alerts: []
+
+  - name: "PVC занят на 90 %: PVCNearlyFull"
+    interval: 1m
+    input_series:
+      - series: 'kubelet_volume_stats_used_bytes{persistentvolumeclaim="prometheus-db",job="kubelet"}'
+        values: '9000000000+0x30'
+      - series: 'kubelet_volume_stats_capacity_bytes{persistentvolumeclaim="prometheus-db",job="kubelet"}'
+        values: '10000000000+0x30'
+      # Тот же PVC через apiserver не должен давать второй инстанс алерта.
+      - series: 'kubelet_volume_stats_used_bytes{persistentvolumeclaim="prometheus-db",job="apiserver"}'
+        values: '0+0x30'
+      - series: 'kubelet_volume_stats_capacity_bytes{persistentvolumeclaim="prometheus-db",job="apiserver"}'
+        values: '0+0x30'
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: PVCNearlyFull
+        exp_alerts:
+          - exp_labels:
+              severity: ticket
+              persistentvolumeclaim: prometheus-db
+              job: kubelet
+            exp_annotations:
+              summary: "PVC prometheus-db: занято больше 85 %"
+              description: >-
+                kubelet_volume_stats: занято выше 85 % ёмкости дольше 15 минут.
+                Для Prometheus на PVC это риск уйти в read-only и потерять данные
+                retention; рост обычно даёт кардинальность метрик. Порог намеренно
+                без прогноза роста — «заполнилось и стабилизировалось» тоже опасно.
+              runbook_url: "docs/runbook.md"

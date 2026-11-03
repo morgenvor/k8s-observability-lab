@@ -1,0 +1,105 @@
+# Инфраструктурные алерты проекта (фаза 3).
+#
+# Набор сознательно узкий: kube-prometheus-stack 92.14.1 уже поставляет почти всё,
+# что нужно для инфраструктуры, и свои копии с другим именем давали бы по два
+# уведомления на одно событие. Решение владельца 2026-11-03: «только то, чего у
+# чарта нет». Делегировано чарту (сверено по рендеру `helmfile template`):
+#   * узел: KubeNodePressure (MemoryPressure|DiskPressure|PIDPressure, for: 10m),
+#           NodeMemoryHighUtilization (использовано >90 %, то есть свободно <10 %,
+#           for: 15m), NodeFilesystemSpaceFillingUp (свободно <15 % И прогноз на 24 ч;
+#           свободно <10 % И прогноз на 4 ч; for: 1h), NodeFilesystemAlmostOutOfSpace
+#           (свободно <5 %, for: 30m);
+#   * поды и PVC: KubePodNotReady, KubePodCrashLooping, KubeContainerWaiting,
+#           KubePersistentVolumeFillingUp — warning это КОНЪЮНКЦИЯ «свободно <15 % И
+#           used>0 И заполнится за 4 дня», for: 1h; беспрогнозный порог есть только у
+#           critical (свободно <3 %, for: 1m);
+#   * цель: TargetDown (доля up==0 в группе job >10 %, for: 10m — для двух реплик
+#           demo-api это ловит потерю одной);
+#   * Prometheus и Alertmanager: PrometheusBadConfig (max_over_time 5m == 0,
+#           for: 10m), AlertmanagerFailedToSendAlerts (доля сбоев >1 %, for: 5m).
+#
+# Своё остаётся только там, где чарт молчит или предупреждает позже:
+#   * KubePodOOMKilled — правила про OOM у чарта нет вообще, а это дрилл фазы 6;
+#   * NodeMemoryAvailableLow — порог 15 % СВОБОДНОЙ памяти: у лабы headroom должен
+#     оставаться ≥500Mi, а чарт ругается только на 90 % использованной. В полосе
+#     «свободно <10 %» сработают оба правила (наше ticket и warning чарта) — это
+#     осознанно: наше предупреждает раньше, а в самом низком диапазоне дубль допустим;
+#   * PVCNearlyFull — порог «занято >85 %» БЕЗ прогноза роста. У чарта такой порог
+#     есть только на «свободно <3 %», а warning требует ещё и predict_linear, поэтому
+#     «заполнилось и стабилизировалось» у чарта осталось бы без алерта.
+#
+# Чего мы не покрываем сознательно: полоса «свободно 5–15 % без прогноза роста» на
+# корневой ФС (у чарта там 5 % статикой и прогнозы на 24 ч/4 ч). Почти-дубль ради
+# узкой полосы не заводим; метрики узла видит дашборд и NodeFilesystem* чарта.
+#
+# Контракт меток — как в плане («Контракт алертов»): severity ∈ {page, ticket, info}.
+# page — то, что требует реакции сейчас (SLO burn-rate и молчание правил); ticket —
+# инфраструктурное событие для планового разбора; info — контекст.
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: demo-infra
+  namespace: monitoring
+  labels:
+    release: monitoring
+    app.kubernetes.io/name: demo-infra
+    app.kubernetes.io/part-of: k8s-observability-lab
+spec:
+  groups:
+    - name: demo-infra.pods
+      rules:
+        # shortcut: метрика KSM отражает ПОСЛЕДНЕЕ завершение, поэтому после одного
+        # OOM алерт висит, пока контейнер не завершится с другой причиной. Для дрилла
+        # фазы 6 это удобно (видно факт и после восстановления пода); в проде к условию
+        # стоит добавить окно по kube_pod_container_status_last_terminated_timestamp.
+        - alert: KubePodOOMKilled
+          expr: kube_pod_container_status_last_terminated_reason{reason="OOMKilled"} == 1
+          for: 1m
+          labels:
+            severity: ticket
+          annotations:
+            summary: "Под {{ $labels.pod }}: контейнер {{ $labels.container }} убит по OOM"
+            description: >-
+              Последнее завершение контейнера — OOMKilled: лимит памяти меньше
+              фактического потребления. Если сейчас идёт дрилл OOMKilled —
+              ожидаемо; иначе проверь limits пода и график рабочего набора,
+              а не только факт рестарта.
+            runbook_url: "docs/drills.md"
+        # Защита от нулевой ёмкости (`capacity > 0`) обязательна: used/0 даёт +Inf и
+        # вечный алерт на «пустом» PVC. Фильтр job="kubelet" — чтобы один PVC не
+        # приезжал дважды (через kubelet и через apiserver).
+        - alert: PVCNearlyFull
+          expr: |
+            kubelet_volume_stats_used_bytes{job="kubelet"}
+            / (kubelet_volume_stats_capacity_bytes{job="kubelet"} > 0) > 0.85
+          for: 15m
+          labels:
+            severity: ticket
+          annotations:
+            summary: "PVC {{ $labels.persistentvolumeclaim }}: занято больше 85 %"
+            description: >-
+              kubelet_volume_stats: занято выше 85 % ёмкости дольше 15 минут.
+              Для Prometheus на PVC это риск уйти в read-only и потерять данные
+              retention; рост обычно даёт кардинальность метрик. Порог намеренно
+              без прогноза роста — «заполнилось и стабилизировалось» тоже опасно.
+            runbook_url: "docs/runbook.md"
+
+    - name: demo-infra.nodes
+      rules:
+        # Метка namespace здесь не ставится: алерт про узел, а не про namespace,
+        # и статическая метка была бы ложью при нескольких namespace на узле.
+        - alert: NodeMemoryAvailableLow
+          expr: |
+            node_memory_MemAvailable_bytes{job="node-exporter"}
+            / node_memory_MemTotal_bytes{job="node-exporter"} < 0.15
+          for: 10m
+          labels:
+            severity: ticket
+          annotations:
+            summary: "Узел {{ $labels.instance }}: свободно меньше 15 % памяти"
+            description: >-
+              node-exporter: MemAvailable ниже 15 % от MemTotal дольше 10 минут.
+              Для лабы это граница headroom: следующая раскатка подов может
+              упереться в память. Самый поздний случай (меньше 10 % свободной
+              памяти) покрывает правило чарта NodeMemoryHighUtilization.
+            runbook_url: "docs/runbook.md"

@@ -1,0 +1,297 @@
+# Юнит-тесты SLO-правил (promtool test rules).
+#
+# rule_files ссылаются на выгрузку spec.groups из .tmp: promtool не читает
+# PrometheusRule CRD, а правила живут именно CRD. Выгрузку делает
+# scripts/check.sh (шаг «PrometheusRule -> rulefiles в .tmp»); отдельного
+# прогона без него нет.
+#
+# Серии — настоящие счётчики: rate() по константе дал бы нули и тест ничего бы не
+# проверил. Метки job/namespace повторяют живые.
+#
+# Почему сценарии на всплеск занимают по 4300 точек: мультиоконная схема сравнивает
+# короткое и длинное окно. На датасете короче окна (6h, 3d) rate() считает по
+# неполному окну, все окна дают одну и ту же долю, и «medium молчит» получается
+# случайно — не из-за разбавления здоровым трафиком, а потому что условие ещё не
+# успело продержаться `for`. Поэтому сценарии подают 3 дня здорового трафика и
+# короткий всплеск: только так видно, что длинное окно гасит всплеск.
+rule_files:
+  - ../../.tmp/rendered/rulefiles/demo-slo.yaml
+  - ../../.tmp/rendered/rulefiles/demo-slo-alerts.yaml
+  - ../../.tmp/rendered/rulefiles/meta.yaml
+evaluation_interval: 1m
+
+tests:
+  - name: "здоровый сервис: SLI 1,0 и ни одного алерта"
+    interval: 1m
+    input_series:
+      - series: 'load_requests_total{job="demo-load",outcome="ok",namespace="demo"}'
+        values: '0+300x200'
+      - series: 'load_requests_total{job="demo-load",outcome="error",namespace="demo"}'
+        values: '0+0x200'
+      - series: 'load_request_duration_seconds_bucket{job="demo-load",le="0.3",namespace="demo"}'
+        values: '0+300x200'
+      - series: 'load_request_duration_seconds_count{job="demo-load",namespace="demo"}'
+        values: '0+300x200'
+    promql_expr_test:
+      - expr: slo:demo_availability:ratio_5m
+        eval_time: 150m
+        exp_samples:
+          - labels: 'slo:demo_availability:ratio_5m{service="demo-api",slo="availability"}'
+            value: 1
+      - expr: slo:demo_availability:burn_rate_5m
+        eval_time: 150m
+        exp_samples:
+          - labels: 'slo:demo_availability:burn_rate_5m{service="demo-api",slo="availability"}'
+            value: 0
+      - expr: slo:demo_latency:ratio_3d
+        eval_time: 150m
+        exp_samples:
+          - labels: 'slo:demo_latency:ratio_3d{service="demo-api",slo="latency"}'
+            value: 1
+    alert_rule_test:
+      - eval_time: 150m
+        alertname: SloDemoAvailabilityBurnFast
+        exp_alerts: []
+      - eval_time: 150m
+        alertname: SloDemoAvailabilityBurnMedium
+        exp_alerts: []
+      - eval_time: 150m
+        alertname: SloDemoAvailabilityBurnSlow
+        exp_alerts: []
+      - eval_time: 150m
+        alertname: SloDemoLatencyBurnFast
+        exp_alerts: []
+      - eval_time: 150m
+        alertname: SloDemoLatencyBurnMedium
+        exp_alerts: []
+      - eval_time: 150m
+        alertname: SloDemoLatencyBurnSlow
+        exp_alerts: []
+      - eval_time: 150m
+        alertname: SloRulesAbsent
+        exp_alerts: []
+
+  # Три дня здоровья, затем 15 минут полного отказа. Fast горит: 5m видит 60x,
+  # а 1h переваливает за 14,4x после 8,6 минут отказа. Medium молчит по существу:
+  # в шестичасовом окне отказ занимает 15 из 360 минут (burn 4,2x при пороге 6x),
+  # то есть выражение ложно, а не «ещё не выдержало for». Slow тоже молчит
+  # (15 из 4320 минут).
+  - name: "3 дня здоровья + 15 минут отказа: горит только fast"
+    interval: 1m
+    input_series:
+      - series: 'load_requests_total{job="demo-load",outcome="ok",namespace="demo"}'
+        values: '0+300x4320 1296000+0x14'
+      - series: 'load_requests_total{job="demo-load",outcome="error",namespace="demo"}'
+        values: '0+0x4320 0+300x14'
+      - series: 'load_request_duration_seconds_bucket{job="demo-load",le="0.3",namespace="demo"}'
+        values: '0+300x4335'
+      - series: 'load_request_duration_seconds_count{job="demo-load",namespace="demo"}'
+        values: '0+300x4335'
+    promql_expr_test:
+      - expr: slo:demo_availability:burn_rate_5m
+        eval_time: 4335m
+        exp_samples:
+          - labels: 'slo:demo_availability:burn_rate_5m{service="demo-api",slo="availability"}'
+            value: 100
+      - expr: slo:demo_availability:burn_rate_6h
+        eval_time: 4335m
+        exp_samples:
+          - labels: 'slo:demo_availability:burn_rate_6h{service="demo-api",slo="availability"}'
+            value: 3.900175375971948
+    alert_rule_test:
+      - eval_time: 4335m
+        alertname: SloDemoAvailabilityBurnFast
+        exp_alerts:
+          - exp_labels:
+              severity: page
+              service: demo-api
+              namespace: demo
+              slo: availability
+            exp_annotations:
+              summary: "demo-api: быстрый расход бюджета доступности (SLO 99 %)"
+              description: >-
+                Доступность demo-api тратит бюджет ошибок со скоростью 100.0x
+                (порог 14,4x в окнах 5m и 1h). При 14,4x за час уходит ~20 %
+                трёхдневного бюджета. Смотри долю не-ok в demo-load и состояние
+                toxiproxy: чаще всего это сетевой сбой или недоступный demo-api.
+              runbook_url: "docs/drills.md"
+              dashboard_url: "/d/demo-slo"
+      - eval_time: 4335m
+        alertname: SloDemoAvailabilityBurnMedium
+        exp_alerts: []
+      - eval_time: 4335m
+        alertname: SloDemoAvailabilityBurnSlow
+        exp_alerts: []
+
+  # 5 % ошибок держатся всё время: бюджет тратится быстрее плана, но медленно.
+  # Все окна видят одну и ту же долю (burn 4,76x), поэтому fast (14,4x) и medium
+  # (6x) не срабатывают, а slow (1x) — срабатывает.
+  - name: "5 % ошибок пять часов: горит только slow"
+    interval: 1m
+    input_series:
+      - series: 'load_requests_total{job="demo-load",outcome="ok",namespace="demo"}'
+        values: '0+300x300'
+      - series: 'load_requests_total{job="demo-load",outcome="error",namespace="demo"}'
+        values: '0+15x300'
+      - series: 'load_request_duration_seconds_bucket{job="demo-load",le="0.3",namespace="demo"}'
+        values: '0+300x300'
+      - series: 'load_request_duration_seconds_count{job="demo-load",namespace="demo"}'
+        values: '0+300x300'
+    promql_expr_test:
+      - expr: slo:demo_availability:burn_rate_3d
+        eval_time: 240m
+        exp_samples:
+          - labels: 'slo:demo_availability:burn_rate_3d{service="demo-api",slo="availability"}'
+            value: 4.761904761904767
+    alert_rule_test:
+      - eval_time: 240m
+        alertname: SloDemoAvailabilityBurnFast
+        exp_alerts: []
+      - eval_time: 240m
+        alertname: SloDemoAvailabilityBurnMedium
+        exp_alerts: []
+      - eval_time: 240m
+        alertname: SloDemoAvailabilityBurnSlow
+        exp_alerts:
+          - exp_labels:
+              severity: ticket
+              service: demo-api
+              namespace: demo
+              slo: availability
+            exp_annotations:
+              summary: "demo-api: бюджет доступности сгорает за окно SLO (99 %)"
+              description: >-
+                За 3 дня расход бюджета превышает 1x: при таких темпах бюджет 1 %
+                закончится к концу окна SLO. Плановая работа с SLO, не инцидент:
+                посмотри, какие маршруты и клиенты дают не-ok.
+              runbook_url: "docs/drills.md"
+              dashboard_url: "/d/demo-slo"
+
+  # Латентность: три дня здоровья, затем 80 минут, когда 90 % запросов медленнее
+  # 300 мс. Доля ≤ 300 мс падает до 0,1 при бюджете 5 %, то есть burn 18x: fast
+  # горит (1h переваливает за порог на 48-й минуте деградации). Medium молчит по
+  # существу: в шестичасовом окне деградация занимает 80 из 360 минут, burn 4x
+  # при пороге 6x. Доступность здорова — availability-алерты не срабатывают.
+  - name: "3 дня здоровья + 80 минут медленных запросов: горит только latency fast"
+    interval: 1m
+    input_series:
+      - series: 'load_requests_total{job="demo-load",outcome="ok",namespace="demo"}'
+        values: '0+300x4400'
+      - series: 'load_requests_total{job="demo-load",outcome="error",namespace="demo"}'
+        values: '0+0x4400'
+      - series: 'load_request_duration_seconds_bucket{job="demo-load",le="0.3",namespace="demo"}'
+        values: '0+300x4320 1296000+30x79'
+      - series: 'load_request_duration_seconds_count{job="demo-load",namespace="demo"}'
+        values: '0+300x4400'
+    promql_expr_test:
+      - expr: slo:demo_latency:burn_rate_5m
+        eval_time: 4400m
+        exp_samples:
+          - labels: 'slo:demo_latency:burn_rate_5m{service="demo-api",slo="latency"}'
+            value: 18
+      - expr: slo:demo_latency:burn_rate_6h
+        eval_time: 4400m
+        exp_samples:
+          - labels: 'slo:demo_latency:burn_rate_6h{service="demo-api",slo="latency"}'
+            value: 4.016713091922006
+    alert_rule_test:
+      - eval_time: 4400m
+        alertname: SloDemoLatencyBurnFast
+        exp_alerts:
+          - exp_labels:
+              severity: page
+              service: demo-api
+              namespace: demo
+              slo: latency
+            exp_annotations:
+              summary: "demo-api: быстрый расход бюджета латентности (SLO 95 % / 300 мс)"
+              description: >-
+                Доля запросов медленнее 300 мс растёт: burn rate 18.0x
+                (порог 14,4x в окнах 5m и 1h) при бюджете 5 %. Проверь
+                латентность клиента demo-load и toxiproxy: дрилл latency
+                добавляет задержку на прокси, а не в приложении.
+              runbook_url: "docs/drills.md"
+              dashboard_url: "/d/demo-slo"
+      - eval_time: 4400m
+        alertname: SloDemoLatencyBurnMedium
+        exp_alerts: []
+      - eval_time: 4400m
+        alertname: SloDemoLatencyBurnSlow
+        exp_alerts: []
+      - eval_time: 4400m
+        alertname: SloDemoAvailabilityBurnFast
+        exp_alerts: []
+
+  # Серии outcome="ok" не было никогда (под стартовал сразу в отказе). Без
+  # `or vector(0)` в числителе дробь оказалась бы пустой, и хвостовой `or vector(1)`
+  # объявил бы доступность 1,0 — то есть полный отказ выглядел бы здоровьем.
+  # Проверяются само значение SLI и срабатывание fast-алерта.
+  - name: "нет серии ok вообще: SLI 0,0 и fast горит"
+    interval: 1m
+    input_series:
+      - series: 'load_requests_total{job="demo-load",outcome="error",namespace="demo"}'
+        values: '0+300x20'
+      - series: 'load_request_duration_seconds_bucket{job="demo-load",le="0.3",namespace="demo"}'
+        values: '0+0x20'
+      - series: 'load_request_duration_seconds_count{job="demo-load",namespace="demo"}'
+        values: '0+300x20'
+    promql_expr_test:
+      - expr: slo:demo_availability:ratio_5m
+        eval_time: 10m
+        exp_samples:
+          - labels: 'slo:demo_availability:ratio_5m{service="demo-api",slo="availability"}'
+            value: 0
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: SloDemoAvailabilityBurnFast
+        exp_alerts:
+          - exp_labels:
+              severity: page
+              service: demo-api
+              namespace: demo
+              slo: availability
+            exp_annotations:
+              summary: "demo-api: быстрый расход бюджета доступности (SLO 99 %)"
+              description: >-
+                Доступность demo-api тратит бюджет ошибок со скоростью 100.0x
+                (порог 14,4x в окнах 5m и 1h). При 14,4x за час уходит ~20 %
+                трёхдневного бюджета. Смотри долю не-ok в demo-load и состояние
+                toxiproxy: чаще всего это сетевой сбой или недоступный demo-api.
+              runbook_url: "docs/drills.md"
+              dashboard_url: "/d/demo-slo"
+
+  # Трафик встал, но счётчики живы (rate = 0). 0/0 даёт NaN: серия существует,
+  # поэтому хвостовой `or vector(1)` не срабатывает и SLI показывает NaN, а не 1,0.
+  # Это осознанное поведение: «нет данных» не должно выглядеть здоровьем, а алерты
+  # на NaN молчат (сравнение с NaN ложно).
+  # Значение NaN здесь НЕ утверждается: promtool сравнивает через `==`, а NaN != NaN —
+  # проба показала, что он падает даже при совпадающих exp/got. Проверяется только
+  # молчание алертов. Пропажу цели demo-load ловит TargetDown чарта, пропажу правил —
+  # SloRulesAbsent; случай «генератор жив, но 0 rps» не покрыт ничем.
+  - name: "нулевой трафик: SLI NaN, SLO-алерты молчат"
+    interval: 1m
+    input_series:
+      - series: 'load_requests_total{job="demo-load",outcome="ok",namespace="demo"}'
+        values: '1000+0x30'
+      - series: 'load_requests_total{job="demo-load",outcome="error",namespace="demo"}'
+        values: '0+0x30'
+      - series: 'load_request_duration_seconds_bucket{job="demo-load",le="0.3",namespace="demo"}'
+        values: '1000+0x30'
+      - series: 'load_request_duration_seconds_count{job="demo-load",namespace="demo"}'
+        values: '1000+0x30'
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: SloDemoAvailabilityBurnFast
+        exp_alerts: []
+      - eval_time: 30m
+        alertname: SloDemoAvailabilityBurnMedium
+        exp_alerts: []
+      - eval_time: 30m
+        alertname: SloDemoAvailabilityBurnSlow
+        exp_alerts: []
+      - eval_time: 30m
+        alertname: SloDemoLatencyBurnFast
+        exp_alerts: []
+      - eval_time: 30m
+        alertname: SloRulesAbsent
+        exp_alerts: []

@@ -109,15 +109,57 @@ fi
 printf 'образов с подставленным тегом: %d\n' "${#APP_DOCKERFILES[@]}"
 
 # --- 5. Правила Prometheus: синтаксис и юнит-тесты ---------------------------
+# promtool не умеет читать PrometheusRule CRD («field apiVersion not found in type
+# rulefmt.RuleGroups»), а правила обязаны быть CRD: оператор находит их по метке
+# release=monitoring. Поэтому spec.groups выгружается в .tmp — единственное место,
+# где формат правил превращается в формат promtool. Файлы rules/tests/*.test.yaml
+# ссылаются на выгрузку относительным путём: второго источника истины нет.
+step "promtool: PrometheusRule -> rulefiles в .tmp"
+RULEFILES_DIR="${PROJECT_ROOT}/.tmp/rendered/rulefiles"
+# :? — чтобы опечатка в PROJECT_ROOT не превратила это в rm -rf от корня.
+rm -rf "${RULEFILES_DIR:?}"
+mkdir -p "${RULEFILES_DIR}"
+need_cmd python3
+# PyYAML без объявления приезжает транзитивно с yamllint; проверяем явно, иначе
+# шаг падал бы трейсбеком ModuleNotFoundError вместо понятного сообщения.
+python3 -c 'import yaml' 2>/dev/null \
+  || die "нет модуля PyYAML для выгрузки правил (python3 -m pip install pyyaml)"
+shopt -s nullglob
+RULE_SOURCES=("${PROJECT_ROOT}"/rules/*.yaml)
+shopt -u nullglob
+[ "${#RULE_SOURCES[@]}" -gt 0 ] \
+  || die "в rules/ нет ни одного .yaml — проверь, что каталог на месте"
+python3 - "${RULEFILES_DIR}" "${RULE_SOURCES[@]}" <<'PY'
+import os
+import sys
+
+import yaml
+
+out_dir, paths = sys.argv[1], sys.argv[2:]
+for path in paths:
+    with open(path, encoding="utf-8") as handle:
+        doc = yaml.safe_load(handle)
+    # kustomization.yaml и прочие служебные файлы пропускаем: это не правила.
+    if not isinstance(doc, dict) or doc.get("kind") != "PrometheusRule":
+        continue
+    groups = (doc.get("spec") or {}).get("groups")
+    if not groups:
+        sys.exit(f"{path}: в PrometheusRule нет spec.groups")
+    name = os.path.basename(path)
+    with open(os.path.join(out_dir, name), "w", encoding="utf-8") as handle:
+        yaml.safe_dump({"groups": groups}, handle, sort_keys=False, allow_unicode=True)
+    print(f"  {name}: групп {len(groups)}")
+PY
+
 step "promtool check rules"
 shopt -s nullglob
-RULE_FILES=(rules/*.yaml)
+RULE_FILES=("${RULEFILES_DIR}"/*.yaml)
 shopt -u nullglob
-if [ "${#RULE_FILES[@]}" -gt 0 ]; then
-  promtool check rules "${RULE_FILES[@]}"
-else
-  SKIPPED+=("promtool check rules (rules/*.yaml появятся в фазе 3)")
-fi
+# Пустая выгрузка означает не «правил ещё нет», а сломанный rules/: иначе ворота
+# молча зеленели бы без единого проверенного правила.
+[ "${#RULE_FILES[@]}" -gt 0 ] \
+  || die "выгрузка не дала ни одного PrometheusRule: в rules/ только служебные файлы?"
+promtool check rules "${RULE_FILES[@]}"
 
 step "promtool test rules"
 shopt -s nullglob

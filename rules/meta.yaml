@@ -1,0 +1,51 @@
+# Мета-алерты: следят не за сервисом, а за самой системой оповещения (фаза 3).
+#
+# Из плана сюда входили три правила; два не созданы сознательно, потому что чарт
+# kube-prometheus-stack поставляет их под теми же именами, и дубль дал бы по два
+# уведомления на одно событие (решение владельца 2026-11-03, см. CHANGELOG):
+#   * Watchdog — general.rules (vector(1), всегда firing, проверяется приёмником);
+#   * AlertmanagerConfigReloadFailed — alertmanager.rules как AlertmanagerFailedReload.
+#
+# Остаётся то, чего у чарта нет: контроль того, что наши SLO-правила вообще
+# вычисляются. Это «сторож сторожа»: если PrometheusRule demo-slo не загрузился
+# или группа падает, burn-rate алерты молчат — и без этого правила тишина
+# выглядела бы как здоровый сервис.
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: demo-meta
+  namespace: monitoring
+  labels:
+    release: monitoring
+    app.kubernetes.io/name: demo-meta
+    app.kubernetes.io/part-of: k8s-observability-lab
+spec:
+  groups:
+    - name: demo-meta.pipeline
+      rules:
+        # absent() ловит именно отсутствие вычисленной серии: PrometheusRule не
+        # загружен, выключен или его не видит ruleSelector. Падение группы на
+        # вычислении покрывает правило чарта PrometheusRuleFailures, поэтому «чего у
+        # чарта нет» здесь — ровно случай «правил нет / они не подхватились».
+        # Обе серии проверяются отдельно: поломка группы demo-slo.latency иначе
+        # осталась бы незамеченной (availability-правила продолжали бы работать).
+        # Нулевой трафик серию не убирает: ratio даёт NaN, но серия существует, так что
+        # этот случай ловят TargetDown чарта и панели дашборда, а не мета-алерт.
+        - alert: SloRulesAbsent
+          expr: |
+            absent(slo:demo_availability:ratio_5m)
+            or absent(slo:demo_latency:ratio_5m)
+          for: 10m
+          labels:
+            severity: page
+            service: demo-api
+            namespace: demo
+          annotations:
+            summary: "SLO-правила demo не вычисляются в Prometheus"
+            description: >-
+              Серии slo:demo_availability:ratio_5m или slo:demo_latency:ratio_5m
+              отсутствуют дольше 10 минут: PrometheusRule demo-slo не загружен
+              (нет метки release=monitoring?), группа падает на вычислении или
+              оператор ещё не перезагрузил правило. Пока это так, burn-rate
+              алерты по SLO молчат — тишина не означает «всё хорошо».
+            runbook_url: "docs/runbook.md"

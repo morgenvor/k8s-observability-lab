@@ -1,0 +1,224 @@
+# SLI/SLO демо-сервиса: записывающие правила (фаза 3).
+#
+# Метка release=monitoring обязательна: оператор ищет PrometheusRule по
+# ruleSelector, и без неё правила просто не попадут в Prometheus.
+#
+# SLI считаются по КЛИЕНТСКИМ метрикам demo-load, а не по серверным: серверный
+# self-report не видит сетевую задержку и обрывы, которые добавляет toxiproxy,
+# то есть не видит то, что чувствует пользователь.
+#
+#   доступность = доля исходов ok среди всех запросов нагрузки; SLO 99 % (бюджет 0,01)
+#   латентность = доля запросов <= 300 мс (бакет le="0.3");   SLO 95 % (бюджет 0,05)
+#
+# Окна 5m/1h — быстрый burn, 30m/6h — средний, 3d — медленный (равен окну SLO).
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: demo-slo
+  namespace: monitoring
+  labels:
+    release: monitoring
+    app.kubernetes.io/name: demo-slo
+    app.kubernetes.io/part-of: k8s-observability-lab
+spec:
+  groups:
+    - name: demo-slo.availability
+      interval: 30s
+      rules:
+        # Числитель обёрнут в `or vector(0)` не для красоты: если серия
+        # outcome="ok" ещё ни разу не появлялась (под стартовал сразу в отказе),
+        # без него вся дробь окажется пустой, а хвостовой `or vector(1)` объявит
+        # доступность равной 1 — то есть полный отказ будет выглядеть здоровьем.
+        # Хвостовой `or vector(1)` закрывает другой случай: метрик нагрузки нет
+        # вообще (правило живо, судить не о чем) — SLO не деградирует. Пропажу цели
+        # demo-load ловит TargetDown чарта (up==0 в группе job), пропажу самих правил —
+        # SloRulesAbsent. Не покрыт ничем случай «генератор жив, но даёт 0 rps».
+        - record: slo:demo_availability:ratio_5m
+          expr: |
+            (
+              sum(rate(load_requests_total{job="demo-load", outcome="ok"}[5m]))
+              or vector(0)
+            )
+            /
+            sum(rate(load_requests_total{job="demo-load"}[5m]))
+            or vector(1)
+          labels:
+            service: demo-api
+            slo: availability
+        - record: slo:demo_availability:ratio_1h
+          expr: |
+            (
+              sum(rate(load_requests_total{job="demo-load", outcome="ok"}[1h]))
+              or vector(0)
+            )
+            /
+            sum(rate(load_requests_total{job="demo-load"}[1h]))
+            or vector(1)
+          labels:
+            service: demo-api
+            slo: availability
+        - record: slo:demo_availability:ratio_30m
+          expr: |
+            (
+              sum(rate(load_requests_total{job="demo-load", outcome="ok"}[30m]))
+              or vector(0)
+            )
+            /
+            sum(rate(load_requests_total{job="demo-load"}[30m]))
+            or vector(1)
+          labels:
+            service: demo-api
+            slo: availability
+        - record: slo:demo_availability:ratio_6h
+          expr: |
+            (
+              sum(rate(load_requests_total{job="demo-load", outcome="ok"}[6h]))
+              or vector(0)
+            )
+            /
+            sum(rate(load_requests_total{job="demo-load"}[6h]))
+            or vector(1)
+          labels:
+            service: demo-api
+            slo: availability
+        - record: slo:demo_availability:ratio_3d
+          expr: |
+            (
+              sum(rate(load_requests_total{job="demo-load", outcome="ok"}[3d]))
+              or vector(0)
+            )
+            /
+            sum(rate(load_requests_total{job="demo-load"}[3d]))
+            or vector(1)
+          labels:
+            service: demo-api
+            slo: availability
+
+        # Burn rate = (доля ошибок) / (бюджет ошибок). 1x — бюджет тратится
+        # равномерно за окно SLO (за 3 дня уйдёт 100 %); 14,4x — в 14,4 раза
+        # быстрее плана, то есть за час такой скорости уходит ~20 % бюджета.
+        - record: slo:demo_availability:burn_rate_5m
+          expr: (1 - slo:demo_availability:ratio_5m) / 0.01
+          labels:
+            service: demo-api
+            slo: availability
+        - record: slo:demo_availability:burn_rate_1h
+          expr: (1 - slo:demo_availability:ratio_1h) / 0.01
+          labels:
+            service: demo-api
+            slo: availability
+        - record: slo:demo_availability:burn_rate_30m
+          expr: (1 - slo:demo_availability:ratio_30m) / 0.01
+          labels:
+            service: demo-api
+            slo: availability
+        - record: slo:demo_availability:burn_rate_6h
+          expr: (1 - slo:demo_availability:ratio_6h) / 0.01
+          labels:
+            service: demo-api
+            slo: availability
+        - record: slo:demo_availability:burn_rate_3d
+          expr: (1 - slo:demo_availability:ratio_3d) / 0.01
+          labels:
+            service: demo-api
+            slo: availability
+
+    - name: demo-slo.latency
+      interval: 30s
+      rules:
+        - record: slo:demo_latency:ratio_5m
+          expr: |
+            (
+              sum(
+                rate(load_request_duration_seconds_bucket{job="demo-load", le="0.3"}[5m])
+              )
+              or vector(0)
+            )
+            /
+            sum(rate(load_request_duration_seconds_count{job="demo-load"}[5m]))
+            or vector(1)
+          labels:
+            service: demo-api
+            slo: latency
+        - record: slo:demo_latency:ratio_1h
+          expr: |
+            (
+              sum(
+                rate(load_request_duration_seconds_bucket{job="demo-load", le="0.3"}[1h])
+              )
+              or vector(0)
+            )
+            /
+            sum(rate(load_request_duration_seconds_count{job="demo-load"}[1h]))
+            or vector(1)
+          labels:
+            service: demo-api
+            slo: latency
+        - record: slo:demo_latency:ratio_30m
+          expr: |
+            (
+              sum(
+                rate(load_request_duration_seconds_bucket{job="demo-load", le="0.3"}[30m])
+              )
+              or vector(0)
+            )
+            /
+            sum(rate(load_request_duration_seconds_count{job="demo-load"}[30m]))
+            or vector(1)
+          labels:
+            service: demo-api
+            slo: latency
+        - record: slo:demo_latency:ratio_6h
+          expr: |
+            (
+              sum(
+                rate(load_request_duration_seconds_bucket{job="demo-load", le="0.3"}[6h])
+              )
+              or vector(0)
+            )
+            /
+            sum(rate(load_request_duration_seconds_count{job="demo-load"}[6h]))
+            or vector(1)
+          labels:
+            service: demo-api
+            slo: latency
+        - record: slo:demo_latency:ratio_3d
+          expr: |
+            (
+              sum(
+                rate(load_request_duration_seconds_bucket{job="demo-load", le="0.3"}[3d])
+              )
+              or vector(0)
+            )
+            /
+            sum(rate(load_request_duration_seconds_count{job="demo-load"}[3d]))
+            or vector(1)
+          labels:
+            service: demo-api
+            slo: latency
+
+        - record: slo:demo_latency:burn_rate_5m
+          expr: (1 - slo:demo_latency:ratio_5m) / 0.05
+          labels:
+            service: demo-api
+            slo: latency
+        - record: slo:demo_latency:burn_rate_1h
+          expr: (1 - slo:demo_latency:ratio_1h) / 0.05
+          labels:
+            service: demo-api
+            slo: latency
+        - record: slo:demo_latency:burn_rate_30m
+          expr: (1 - slo:demo_latency:ratio_30m) / 0.05
+          labels:
+            service: demo-api
+            slo: latency
+        - record: slo:demo_latency:burn_rate_6h
+          expr: (1 - slo:demo_latency:ratio_6h) / 0.05
+          labels:
+            service: demo-api
+            slo: latency
+        - record: slo:demo_latency:burn_rate_3d
+          expr: (1 - slo:demo_latency:ratio_3d) / 0.05
+          labels:
+            service: demo-api
+            slo: latency
