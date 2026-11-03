@@ -61,13 +61,23 @@ render_demo_manifests() {
   local overlay="${PROJECT_ROOT}/.tmp/overlay"
   local out="${PROJECT_ROOT}/.tmp/rendered/deploy.yaml"
   mkdir -p "${overlay}" "$(dirname "${out}")"
+  local images=()
+  local dockerfile
+  for dockerfile in "${PROJECT_ROOT}"/app/*/Dockerfile; do
+    [ -f "${dockerfile}" ] || continue
+    images+=("$(basename "$(dirname "${dockerfile}")")")
+  done
+  [ "${#images[@]}" -gt 0 ] || die "нет app/*/Dockerfile — тегировать нечего"
+
   {
     printf 'apiVersion: kustomize.config.k8s.io/v1beta1\nkind: Kustomization\n'
     # LoadRestrictionsNone нужен ниже: оверлей в .tmp ссылается на deploy/ в корне.
     printf 'resources:\n  - ../../deploy/base\n  - ../../deploy/dashboards\n'
     printf 'images:\n'
-    for image in demo-api demo-load; do
-      printf '  - name: %s\n    newTag: %s\n' "${image}" "${tag}"
+    # Список образов — из app/*/Dockerfile, как в build-image.sh/import-image.sh:
+    # иначе новый сервис (alert-sink в фазе 4) отрендерился бы с заглушкой :local.
+    for dockerfile in "${images[@]}"; do
+      printf '  - name: %s\n    newTag: %s\n' "${dockerfile}" "${tag}"
     done
   } > "${overlay}/kustomization.yaml"
   kubectl kustomize --load-restrictor LoadRestrictionsNone "${overlay}" > "${out}"

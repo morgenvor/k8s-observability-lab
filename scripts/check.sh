@@ -65,11 +65,48 @@ kubeconform -strict -ignore-missing-schemas -summary -output text .tmp/rendered/
 # --- 4. Свои манифесты: kustomize + kubeconform ------------------------------
 step "kubectl kustomize . -> kubeconform"
 kubectl kustomize . > .tmp/rendered/kustomize.yaml
-if [ -s .tmp/rendered/kustomize.yaml ]; then
-  kubeconform -strict -ignore-missing-schemas -summary -output text .tmp/rendered/kustomize.yaml
+# Пустой рендер теперь означает сломанный kustomization.yaml, а не «пока нечего рендерить».
+[ -s .tmp/rendered/kustomize.yaml ] || die "рендер kustomize пуст — проверь resources в kustomization.yaml"
+kubeconform -strict -ignore-missing-schemas -summary -output text .tmp/rendered/kustomize.yaml
+
+# --- 4a. Дашборды Grafana: JSON внутри ConfigMap kubeconform не проверяет ----
+step "дашборды: валидность JSON"
+shopt -s nullglob
+DASH_FILES=(deploy/dashboards/*.json)
+shopt -u nullglob
+if [ "${#DASH_FILES[@]}" -eq 0 ]; then
+  SKIPPED+=("валидация JSON дашбордов (deploy/dashboards/*.json ещё нет)")
+elif command -v jq >/dev/null 2>&1; then
+  for dashboard in "${DASH_FILES[@]}"; do
+    jq -e . "${dashboard}" >/dev/null
+  done
+  printf 'проверено JSON-файлов: %d (jq)\n' "${#DASH_FILES[@]}"
+elif command -v python3 >/dev/null 2>&1; then
+  for dashboard in "${DASH_FILES[@]}"; do
+    python3 -m json.tool "${dashboard}" >/dev/null
+  done
+  printf 'проверено JSON-файлов: %d (python3)\n' "${#DASH_FILES[@]}"
 else
-  SKIPPED+=("kubeconform для kustomize (resources ещё пуст: deploy/base — фаза 2, rules — фаза 3)")
+  SKIPPED+=("валидация JSON дашбордов (нет ни jq, ни python3)")
 fi
+
+# --- 4b. Оверлей деплоя: тег подставляется во ВСЕ образы приложений ---------
+# Ловит два класса ошибок: новый сервис с тегом :local (так было бы с alert-sink
+# в фазе 4) и случайную заглушку, доехавшую до манифестов.
+step "рендер оверлея деплоя (теги образов)"
+OVERLAY_RENDER="$(render_demo_manifests ci-check)"
+shopt -s nullglob
+APP_DOCKERFILES=(app/*/Dockerfile)
+shopt -u nullglob
+for dockerfile in "${APP_DOCKERFILES[@]}"; do
+  app_name="$(basename "$(dirname "${dockerfile}")")"
+  grep -q "image: ${app_name}:ci-check" "${OVERLAY_RENDER}" \
+    || die "в рендере нет образа ${app_name}:ci-check — build/import найдут этот сервис, а deploy оставит ему заглушку тега"
+done
+if grep -qE 'image: [^ "]*:local$' "${OVERLAY_RENDER}"; then
+  die "в рендере остался тег :local — заглушка из kustomization.yaml попала в манифесты"
+fi
+printf 'образов с подставленным тегом: %d\n' "${#APP_DOCKERFILES[@]}"
 
 # --- 5. Правила Prometheus: синтаксис и юнит-тесты ---------------------------
 step "promtool check rules"

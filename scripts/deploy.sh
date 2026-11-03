@@ -14,6 +14,9 @@ need_cmd git
 
 TAG="${IMAGE_TAG:-$(git rev-parse --short HEAD)}"
 WAIT_TARGETS="${WAIT_TARGETS:-180}"
+case "${WAIT_TARGETS}" in
+  ''|*[!0-9]*) die "WAIT_TARGETS='${WAIT_TARGETS}' не число секунд (ожидается целое, например 180)" ;;
+esac
 
 info "рендер манифестов (тег ${TAG})"
 RENDERED="$(render_demo_manifests "${TAG}")"
@@ -57,23 +60,31 @@ for _ in $(seq 1 30); do
 done
 [ "${forward_ready}" -eq 1 ] || die "порт-форвард к Prometheus не поднялся на 127.0.0.1:${PROM_PORT}"
 
-info "ожидание, пока оба ServiceMonitor попадут в Prometheus (до ${WAIT_TARGETS} с)"
+# Гейт проверяет три вещи по отдельности, а не «сколько-то целей живы»:
+#  1) оба эндпоинта demo-api (2 реплики) скрейпятся;
+#  2) demo-load скрейпится (иначе пропажа его ServiceMonitor прошла бы незамеченной);
+#  3) нагрузка реально доходит до demo-api — up=1 ничего не говорит о работоспособности
+#     пути demo-load → toxiproxy → demo-api (инцидент с конфигом toxiproxy 2026-11-03
+#     давал up=1 при 100 % ошибок у клиента).
+info "ожидание целей и живого трафика (до ${WAIT_TARGETS} с)"
 deadline=$((SECONDS + WAIT_TARGETS))
-total=""; healthy=""
+api_up=""; load_up=""; ok_rate=""
 while [ "${SECONDS}" -lt "${deadline}" ]; do
-  total="$(prom_scalar 'count(up{job=~"demo-.*"})')"
-  healthy="$(prom_scalar 'count(up{job=~"demo-.*"} == 1)')"
-  if [ "${total:-0}" -ge 2 ] && [ "${total}" = "${healthy}" ]; then
+  api_up="$(prom_scalar 'count(up{job="demo-api"} == 1)')"
+  load_up="$(prom_scalar 'count(up{job="demo-load"} == 1)')"
+  ok_rate="$(prom_scalar 'sum(rate(load_requests_total{outcome="ok"}[2m]))')"
+  if [ "${api_up:-0}" -ge 2 ] && [ "${load_up:-0}" -ge 1 ] \
+      && awk "BEGIN{exit !(${ok_rate:-0} > 0)}"; then
     break
   fi
   sleep 5
 done
 
-if [ "${total:-0}" -lt 2 ] || [ "${total}" != "${healthy}" ]; then
-  kubectl -n demo get pods -o wide >&2 || true
-  die "не все цели demo подняты: up==1 ${healthy:-?} из ${total:-?}; проверь ServiceMonitor (метка release=monitoring) и поды"
-fi
-info "все цели demo живы: up==1 ${healthy} из ${total}"
+[ "${api_up:-0}" -ge 2 ] || die "demo-api: up==1 у ${api_up:-0} эндпоинтов (нужно 2); проверь поды и ServiceMonitor (метка release=monitoring)"
+[ "${load_up:-0}" -ge 1 ] || die "demo-load: up==1 у ${load_up:-0} целей (нужно 1); проверь ServiceMonitor/demo-load"
+awk "BEGIN{exit !(${ok_rate:-0} > 0)}" \
+  || die "нагрузка не доходит до demo-api: rate(load_requests_total{outcome=\"ok\"}) = ${ok_rate:-0}; проверь toxiproxy (прокси demo-api:12001 → demo-api:8080) и TARGET_URL"
+info "цели живы (demo-api ${api_up}, demo-load ${load_up}), ok-трафик ${ok_rate} rps"
 
 info "headroom нод"
 kubectl top nodes || warn "kubectl top недоступен (metrics-server?), проверь вручную"

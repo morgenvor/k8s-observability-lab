@@ -1,26 +1,9 @@
 # toxiproxy: точка инъекции сбоев «снаружи приложения» — сеть, а не код.
 # demo-load ходит в 12001, toxiproxy проксирует в demo-api:8080; дриллы latency/errors
 # навешивают токсины через API 8474 и снимают их. Сам toxiproxy остаётся без изменений.
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: toxiproxy-config
-  labels:
-    app: toxiproxy
-data:
-  # Формат toxiproxy 2.9.0 — JSON-МАССИВ прокси, а не объект {"proxies": [...]}:
-  # с объектом сервер пишет "cannot unmarshal object ... " и стартует без прокси,
-  # а demo-load получает ошибки на 12001 (проверено живьём 2026-11-03).
-  toxiproxy.json: |
-    [
-      {
-        "name": "demo-api",
-        "listen": "0.0.0.0:12001",
-        "upstream": "demo-api:8080",
-        "enabled": true
-      }
-    ]
----
+# Конфиг — отдельный файл toxiproxy.json и configMapGenerator: хеш в имени ConfigMap
+# меняет pod template, поэтому `kubectl apply` сам перезапускает поды (ручной
+# `rollout restart` больше не нужен).
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -40,6 +23,12 @@ spec:
         app: toxiproxy
         app.kubernetes.io/name: toxiproxy
     spec:
+      # runAsNonRoot здесь не ставим: в образе нет USER, kubelet не сможет проверить
+      # пользователя и под не стартует. Остальное ужесточение безопасно для root внутри
+      # контейнера: бинарник не пишет на диск и слушает порты >1024.
+      securityContext:
+        seccompProfile:
+          type: RuntimeDefault
       containers:
         - name: toxiproxy
           # Сторонний образ с пином тега: версия поднимается отдельным решением.
@@ -79,6 +68,11 @@ spec:
             limits:
               cpu: 100m
               memory: 64Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
           volumeMounts:
             - name: config
               mountPath: /config

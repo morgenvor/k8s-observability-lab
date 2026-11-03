@@ -16,6 +16,10 @@ TAG="${IMAGE_TAG:-$(git rev-parse --short HEAD)}"
 SSH_CONFIG="${LAB_SSH_CONFIG:-${PROJECT_ROOT}/../proxmox-lab/.secrets/ssh_config}"
 [ -f "${SSH_CONFIG}" ] || die "нет ssh-конфига лабы: ${SSH_CONFIG} (задай LAB_SSH_CONFIG; ключи и адреса живут вне репозитория)"
 
+# BatchMode: в неинтерактивном прогоне ssh не должен ждать пароль/пассфразу.
+# Массив, а не строка: shellcheck -S warning ругается на неквотированное раскрытие.
+SSH_OPTS=(-o BatchMode=yes -o ConnectTimeout=10)
+
 # Ноды берём у кластера, а не из списка в скрипте: имена нод не попадают в git,
 # а ssh_config лабы знает их как алиасы Host (адреса и ключи живут вне репозитория).
 mapfile -t NODES < <(kubectl get nodes -o jsonpath='{.items[*].metadata.name}' | tr ' ' '\n')
@@ -41,15 +45,18 @@ for node in "${NODES[@]}"; do
   # docker save пишет tar в stdout, ssh отдаёт его в stdin `k3s ctr images import -`.
   # Стрим не создаёт временный tarball на диске и не требует места под образ.
   docker save "${IMAGES[@]}" \
-    | ssh -F "${SSH_CONFIG}" "${node}" 'sudo k3s ctr images import -' >/dev/null \
+    | ssh -F "${SSH_CONFIG}" "${SSH_OPTS[@]}" "${node}" 'sudo -n k3s ctr images import -' >/dev/null \
     || die "импорт в ${node} не удался: проверь ssh-алиас ноды в LAB_SSH_CONFIG и sudo на ноде"
 done
 
 # Проверка после импорта: тег виден в containerd на каждой ноде.
+# containerd хранит образ с полным именем (docker.io/library/demo-api:тег), поэтому
+# сверяем по суффиксу `(^|/)имя:тег$`, а не строкой целиком: `grep -Fx` не совпадает
+# никогда, и проверка ложно падала после успешного импорта (нашло ревью 2026-11-03).
 for node in "${NODES[@]}"; do
   info "проверка ${node}"
   for image in "${IMAGES[@]}"; do
-    ssh -F "${SSH_CONFIG}" "${node}" "sudo k3s ctr images ls -q | grep -Fx '${image}'" \
+    ssh -F "${SSH_CONFIG}" "${SSH_OPTS[@]}" "${node}" "sudo -n k3s ctr images ls -q | grep -qE '(^|/)${image}\$'" \
       || die "образ ${image} не найден в containerd на ${node}: импорт не удался"
   done
 done

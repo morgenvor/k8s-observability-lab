@@ -8,4 +8,11 @@ resources:
   - toxiproxy.yaml
   - servicemonitors.yaml
 
+# Хеш в имени ConfigMap — намеренно: при правке toxiproxy.json меняется pod template
+# и rollout происходит сам, без ручного `kubectl rollout restart`.
+configMapGenerator:
+  - name: toxiproxy-config
+    files:
+      - toxiproxy.json
+
 namespace: demo

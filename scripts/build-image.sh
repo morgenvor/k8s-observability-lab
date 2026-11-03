@@ -9,8 +9,11 @@ cd "${PROJECT_ROOT}"
 need_cmd docker
 need_cmd git
 
-TAG="${IMAGE_TAG:-$(git rev-parse --short HEAD)}"
-[ -n "${TAG}" ] || die "пустой тег образа: задай IMAGE_TAG"
+TAG="${IMAGE_TAG:-}"
+if [ -z "${TAG}" ]; then
+  # 2>/dev/null + явная ошибка: иначе под set -e скрипт падал бы молча без «git rev-parse»
+  TAG="$(git rev-parse --short HEAD 2>/dev/null)" || die "не удалось определить тег: задай IMAGE_TAG"
+fi
 
 shopt -s nullglob
 DOCKERFILES=(app/*/Dockerfile)
@@ -21,7 +24,8 @@ for dockerfile in "${DOCKERFILES[@]}"; do
   app_dir="$(dirname "${dockerfile}")"
   name="$(basename "${app_dir}")"
   info "docker build ${name}:${TAG}"
-  docker build -t "${name}:${TAG}" "${app_dir}"
+  # Платформа явная: форк на arm64-машине иначе соберёт arm64-образ для amd64-нод.
+  docker build --platform linux/amd64 -t "${name}:${TAG}" "${app_dir}"
   printf '%s:%s\n' "${name}" "${TAG}"
 done
 

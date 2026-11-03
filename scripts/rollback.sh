@@ -23,9 +23,11 @@ TAG="${IMAGE_TAG:-$(git rev-parse --short HEAD)}"
 RENDERED="$(render_demo_manifests "${TAG}")"
 
 if [ "${ASSUME_YES}" -ne 1 ]; then
+  [ -t 0 ] || die "нет интерактивного ввода (stdin не tty): для неинтерактивного запуска используй --yes"
   warn "будут удалены namespace demo (все поды/сервисы демо-контура) и дашборд demo-red в monitoring"
   printf 'Продолжить? [y/N] '
-  read -r answer
+  # || answer="": при EOF read возвращает 1 и под set -e скрипт падал бы без сообщения
+  read -r answer || answer=""
   case "${answer}" in
     y|Y|yes|YES) ;;
     *) info "отменено"; exit 0 ;;
@@ -33,4 +35,7 @@ if [ "${ASSUME_YES}" -ne 1 ]; then
 fi
 
 kubectl delete --ignore-not-found -f "${RENDERED}"
+# Удаление namespace асинхронно: без ожидания следующий deploy.sh может упереться
+# в ещё Terminating namespace. Дашборд удаляется отдельным объектом и ждать не нужно.
+kubectl wait --for=delete ns/demo --timeout=120s >/dev/null 2>&1 || true
 info "демо-контур удалён (образы в containerd остались, кластер monitoring не тронут)"

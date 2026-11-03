@@ -33,18 +33,5 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Build app images (registry не используется, push не нужен)
-        shell: bash
-        run: |
-          set -euo pipefail
-          shopt -s nullglob
-          found=0
-          for dockerfile in app/*/Dockerfile; do
-            app_dir="$(dirname "${dockerfile}")"
-            name="$(basename "${app_dir}")"
-            echo "--- ${name}"
-            docker build -t "${name}:ci" "${app_dir}"
-            found=1
-          done
-          if [ "${found}" -eq 0 ]; then
-            echo "нет app/*/Dockerfile — собирать нечего (появятся в фазе 1)"
-          fi
+        # Тот же скрипт, что локально: иначе CI и локальная сборка расходятся.
+        run: IMAGE_TAG=ci ./scripts/build-image.sh
