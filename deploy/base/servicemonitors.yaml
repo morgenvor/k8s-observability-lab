@@ -1,0 +1,36 @@
+# ServiceMonitor'ы живут в demo вместе с сервисами, но оператор ищет их по метке
+# release=monitoring (serviceMonitorSelector в kube-prometheus-stack).
+# Без этой метки цели просто не появятся в Prometheus — это самая частая «невидимая» ошибка.
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: demo-api
+  labels:
+    release: monitoring
+    app.kubernetes.io/name: demo-api
+spec:
+  selector:
+    matchLabels:
+      app: demo-api
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: 30s
+      scrapeTimeout: 10s
+---
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: demo-load
+  labels:
+    release: monitoring
+    app.kubernetes.io/name: demo-load
+spec:
+  selector:
+    matchLabels:
+      app: demo-load
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: 30s
+      scrapeTimeout: 10s

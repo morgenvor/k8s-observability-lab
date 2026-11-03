@@ -54,6 +54,27 @@ default_kubeconfig() {
   die "нет kubeconfig: задай KUBECONFIG или положи его в ../proxmox-lab/.secrets/ (кластер живёт в лабе; если VM 101/102 остановлены — их старт это действие владельца)"
 }
 
+# Рендер демо-контура с тегами образов в .tmp: трекаемый kustomization.yaml не меняется.
+# Печатает путь к отрендеренному файлу. Используется deploy.sh и rollback.sh.
+render_demo_manifests() {
+  local tag="$1"
+  local overlay="${PROJECT_ROOT}/.tmp/overlay"
+  local out="${PROJECT_ROOT}/.tmp/rendered/deploy.yaml"
+  mkdir -p "${overlay}" "$(dirname "${out}")"
+  {
+    printf 'apiVersion: kustomize.config.k8s.io/v1beta1\nkind: Kustomization\n'
+    # LoadRestrictionsNone нужен ниже: оверлей в .tmp ссылается на deploy/ в корне.
+    printf 'resources:\n  - ../../deploy/base\n  - ../../deploy/dashboards\n'
+    printf 'images:\n'
+    for image in demo-api demo-load; do
+      printf '  - name: %s\n    newTag: %s\n' "${image}" "${tag}"
+    done
+  } > "${overlay}/kustomization.yaml"
+  kubectl kustomize --load-restrictor LoadRestrictionsNone "${overlay}" > "${out}"
+  [ -s "${out}" ] || die "рендер манифестов пуст — проверь kustomization.yaml и deploy/base"
+  printf '%s\n' "${out}"
+}
+
 require_cluster() {
   local kc
   kc="$(default_kubeconfig)"

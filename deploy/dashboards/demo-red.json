@@ -1,0 +1,154 @@
+{
+  "uid": "demo-red",
+  "title": "demo — RED и латентность",
+  "tags": ["demo", "red"],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "editable": true,
+  "refresh": "30s",
+  "time": { "from": "now-1h", "to": "now" },
+  "templating": { "list": [] },
+  "annotations": { "list": [] },
+  "panels": [
+    {
+      "id": 1,
+      "title": "RPS: сервер и клиент",
+      "description": "Сервер — demo-api (http_requests_total), клиент — demo-load (load_requests_total).",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": {
+        "defaults": { "unit": "reqps", "custom": { "lineWidth": 2, "fillOpacity": 10 } },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["lastNotNull", "max"] },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "sum(rate(http_requests_total{job=\"demo-api\"}[5m]))",
+          "legendFormat": "сервер demo-api"
+        },
+        {
+          "refId": "B",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "sum(rate(load_requests_total{job=\"demo-load\"}[5m]))",
+          "legendFormat": "клиент demo-load"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "title": "Доля ошибок",
+      "description": "Клиентская доля исходов не-ok (взгляд пользователя) и серверные 5xx.",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "min": 0,
+          "max": 1,
+          "custom": { "lineWidth": 2, "fillOpacity": 10, "thresholdsStyle": { "mode": "dashed" } },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [{ "color": "green", "value": null }, { "color": "red", "value": 0.01 }]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["lastNotNull", "max"] },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "sum(rate(load_requests_total{job=\"demo-load\",outcome!=\"ok\"}[5m])) / clamp_min(sum(rate(load_requests_total{job=\"demo-load\"}[5m])), 1)",
+          "legendFormat": "клиент: не-ok"
+        },
+        {
+          "refId": "B",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "sum(rate(http_requests_total{job=\"demo-api\",status_class=\"5xx\"}[5m])) / clamp_min(sum(rate(http_requests_total{job=\"demo-api\"}[5m])), 1)",
+          "legendFormat": "сервер: 5xx"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "title": "p95 латентности: сервер и клиент",
+      "description": "Серверная гистограмма — работа demo-api, клиентская — что видит пользователь через toxiproxy (она идёт в SLO).",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": { "lineWidth": 2, "fillOpacity": 10, "thresholdsStyle": { "mode": "dashed" } },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [{ "color": "green", "value": null }, { "color": "orange", "value": 0.3 }]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["lastNotNull", "max"] },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(http_request_duration_seconds_bucket{job=\"demo-api\"}[5m])))",
+          "legendFormat": "сервер demo-api"
+        },
+        {
+          "refId": "B",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(load_request_duration_seconds_bucket{job=\"demo-load\"}[5m])))",
+          "legendFormat": "клиент demo-load"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "title": "Latency SLO: доля запросов ≤ 300 мс",
+      "description": "Цель 95 %. Считается по клиентским метрикам и бакету le=0.3: SLO не зависит от грубости серверных бакетов.",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
+      "datasource": { "type": "prometheus", "uid": "prometheus" },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "min": 0,
+          "max": 1,
+          "custom": { "lineWidth": 2, "fillOpacity": 10, "thresholdsStyle": { "mode": "dashed" } },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [{ "color": "red", "value": null }, { "color": "green", "value": 0.95 }]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["lastNotNull", "min"] },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "expr": "sum(rate(load_request_duration_seconds_bucket{job=\"demo-load\",le=\"0.3\"}[5m])) / clamp_min(sum(rate(load_request_duration_seconds_count{job=\"demo-load\"}[5m])), 1)",
+          "legendFormat": "доля ≤ 300 мс"
+        }
+      ]
+    }
+  ]
+}

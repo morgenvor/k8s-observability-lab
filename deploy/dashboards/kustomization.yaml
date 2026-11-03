@@ -1,0 +1,23 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+# Дашборд лежит в monitoring: там его читает sidecar Grafana (LABEL=grafana_dashboard).
+# Сам JSON — отдельный файл (это JSON, а не YAML): так его проверяет любой JSON-парсер,
+# а yamllint не ругается на длинные строки PromQL.
+configMapGenerator:
+  - name: demo-red
+    files:
+      - demo-red.json
+    options:
+      labels:
+        grafana_dashboard: "1"
+        app.kubernetes.io/part-of: k8s-observability-lab
+      annotations:
+        # Папку sidecar учитывает только при folderAnnotation в values Grafana;
+        # без этого дашборд попадёт в общую папку (см. CHANGELOG).
+        grafana_folder: demo
+
+# Имя ConfigMap без хеша: так его ждёт sidecar и так проще искать глазами.
+generatorOptions:
+  disableNameSuffixHash: true
+
+namespace: monitoring

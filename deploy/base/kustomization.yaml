@@ -1,0 +1,11 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+# Всё содержимое base живёт в namespace demo; теги образов подставляет scripts/deploy.sh.
+resources:
+  - namespace.yaml
+  - demo-api.yaml
+  - demo-load.yaml
+  - toxiproxy.yaml
+  - servicemonitors.yaml
+
+namespace: demo

@@ -1,0 +1,9 @@
+# Пространство фикстуры: приложения, нагрузка и toxiproxy живут отдельно от monitoring.
+# Правила, AlertmanagerConfig и дашборды при этом остаются в monitoring — там их ищет оператор.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: demo
+  labels:
+    # Признак «это демо-контур проекта», по нему удобно отбирать логи/метрики.
+    app.kubernetes.io/part-of: k8s-observability-lab

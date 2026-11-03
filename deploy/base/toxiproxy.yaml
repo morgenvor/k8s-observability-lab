@@ -1,0 +1,109 @@
+# toxiproxy: точка инъекции сбоев «снаружи приложения» — сеть, а не код.
+# demo-load ходит в 12001, toxiproxy проксирует в demo-api:8080; дриллы latency/errors
+# навешивают токсины через API 8474 и снимают их. Сам toxiproxy остаётся без изменений.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: toxiproxy-config
+  labels:
+    app: toxiproxy
+data:
+  # Формат toxiproxy 2.9.0 — JSON-МАССИВ прокси, а не объект {"proxies": [...]}:
+  # с объектом сервер пишет "cannot unmarshal object ... " и стартует без прокси,
+  # а demo-load получает ошибки на 12001 (проверено живьём 2026-11-03).
+  toxiproxy.json: |
+    [
+      {
+        "name": "demo-api",
+        "listen": "0.0.0.0:12001",
+        "upstream": "demo-api:8080",
+        "enabled": true
+      }
+    ]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: toxiproxy
+  labels:
+    app: toxiproxy
+    app.kubernetes.io/name: toxiproxy
+    app.kubernetes.io/part-of: k8s-observability-lab
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: toxiproxy
+  template:
+    metadata:
+      labels:
+        app: toxiproxy
+        app.kubernetes.io/name: toxiproxy
+    spec:
+      containers:
+        - name: toxiproxy
+          # Сторонний образ с пином тега: версия поднимается отдельным решением.
+          image: ghcr.io/shopify/toxiproxy:2.9.0
+          imagePullPolicy: IfNotPresent
+          args:
+            - -host
+            - 0.0.0.0
+            - -config
+            - /config/toxiproxy.json
+          ports:
+            - name: api
+              containerPort: 8474
+              protocol: TCP
+            - name: proxy
+              containerPort: 12001
+              protocol: TCP
+          readinessProbe:
+            httpGet:
+              path: /proxies
+              port: api
+            periodSeconds: 5
+            timeoutSeconds: 2
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /proxies
+              port: api
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 2
+            failureThreshold: 3
+          resources:
+            requests:
+              cpu: 20m
+              memory: 24Mi
+            limits:
+              cpu: 100m
+              memory: 64Mi
+          volumeMounts:
+            - name: config
+              mountPath: /config
+              readOnly: true
+      volumes:
+        - name: config
+          configMap:
+            name: toxiproxy-config
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: toxiproxy
+  labels:
+    app: toxiproxy
+    app.kubernetes.io/name: toxiproxy
+spec:
+  selector:
+    app: toxiproxy
+  ports:
+    - name: api
+      port: 8474
+      targetPort: api
+      protocol: TCP
+    - name: proxy
+      port: 12001
+      targetPort: proxy
+      protocol: TCP

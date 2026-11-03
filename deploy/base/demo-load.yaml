@@ -1,0 +1,83 @@
+# demo-load: генератор нагрузки. Ходит не напрямую в demo-api, а через toxiproxy:
+# именно клиентские метрики нагрузки считаются SLI (латентность «как у пользователя»).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: demo-load
+  labels:
+    app: demo-load
+    app.kubernetes.io/name: demo-load
+    app.kubernetes.io/part-of: k8s-observability-lab
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: demo-load
+  template:
+    metadata:
+      labels:
+        app: demo-load
+        app.kubernetes.io/name: demo-load
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: demo-load
+          image: demo-load:local
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+          env:
+            - name: PORT
+              value: "8080"
+            - name: TARGET_URL
+              value: http://toxiproxy.demo:12001/work
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 5
+            timeoutSeconds: 2
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 2
+            failureThreshold: 3
+          resources:
+            requests:
+              cpu: 25m
+              memory: 32Mi
+            limits:
+              cpu: 100m
+              memory: 64Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: demo-load
+  labels:
+    app: demo-load
+    app.kubernetes.io/name: demo-load
+spec:
+  selector:
+    app: demo-load
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
+      protocol: TCP
