@@ -10,6 +10,7 @@ source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 cd "${PROJECT_ROOT}"
 require_cluster
 need_cmd curl
+need_cmd docker
 need_cmd git
 
 TAG="${IMAGE_TAG:-$(git rev-parse --short HEAD)}"
@@ -17,6 +18,16 @@ WAIT_TARGETS="${WAIT_TARGETS:-180}"
 case "${WAIT_TARGETS}" in
   ''|*[!0-9]*) die "WAIT_TARGETS='${WAIT_TARGETS}' не число секунд (ожидается целое, например 180)" ;;
 esac
+
+# Тег = git SHA, поэтому после нового коммита старых образов для деплоя уже нет.
+# Без этой проверки apply прошёл бы, а поды ушли в ImagePullBackOff (registry нет).
+shopt -s nullglob
+for dockerfile in app/*/Dockerfile; do
+  image_name="$(basename "$(dirname "${dockerfile}")"):${TAG}"
+  docker image inspect "${image_name}" >/dev/null 2>&1 \
+    || die "нет локального образа ${image_name}: сначала ./scripts/build-image.sh и ./scripts/import-image.sh (тег = short SHA коммита)"
+done
+shopt -u nullglob
 
 info "рендер манифестов (тег ${TAG})"
 RENDERED="$(render_demo_manifests "${TAG}")"
