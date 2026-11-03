@@ -1,0 +1,17 @@
+{
+  "name": "demo-api",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Фикстура лаборатории: HTTP-сервис с корректными RED-метриками и JSON-логами",
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "start": "node src/server.js",
+    "test": "node --test"
+  },
+  "dependencies": {
+    "prom-client": "15.1.3"
+  }
+}

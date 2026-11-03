@@ -1,0 +1,17 @@
+{
+  "name": "demo-load",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Генератор нагрузки для демо-сервиса с клиентскими SLI-метриками",
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "start": "node src/load.js",
+    "test": "node --test"
+  },
+  "dependencies": {
+    "prom-client": "15.1.3"
+  }
+}
