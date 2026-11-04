@@ -1,4 +1,7 @@
-apiVersion: monitoring.coreos.com/v1
+# v1alpha1 — единственная версия CRD alertmanagerconfigs у operator v0.94.2
+# (v1 в этой сборке CRD нет: kubectl apply -k . на apiVersion v1 даёт
+# «no matches for kind AlertmanagerConfig»).
+apiVersion: monitoring.coreos.com/v1alpha1
 kind: AlertmanagerConfig
 metadata:
   name: demo-notifications
