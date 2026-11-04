@@ -12,6 +12,12 @@ metadata:
 # alert-sink (webhook в namespace demo). Email/SMTP и секретов нет намеренно —
 # получателя в проекте изображает сервис, а не человек.
 #
+# Маршрут ОДИН и без матчеров: severity доставку не разветвляет. Это осознанно для
+# v1.0 (получатель один): у наших правил severity ∈ {page, ticket, info}, у правил
+# чарта — critical/warning, у Watchdog — none. Матчеры по severity без явного
+# catch-all child-route отрезали бы Watchdog и алерты чарта (несовпавшая ветка уходит
+# к null-получателю). Разветвление — v1.1 вместе с Telegram.
+#
 # Поля CRD camelCase (groupBy/groupWait/...), а не snake_case из плана: так описана
 # схема AlertmanagerConfig, и оператор читает именно её.
 spec:
