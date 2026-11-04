@@ -16,6 +16,12 @@ export const MAX_BODY_BYTES = 1024 * 1024;
 // Кольцо уведомлений. 200 последних хватает на таймлайн дрилла (4 алерта × несколько
 // минут), а память остаётся ограниченной (уведомление — единицы килобайт).
 export const TIMELINE_SIZE = 200;
+// Второй предел кольца — байты. Запись хранит labels целиком, поэтому её размер
+// сравним с размером payload (до MAX_BODY_BYTES = 1 MiB): 200 × 1 MiB = 200 MiB в
+// памяти при лимите пода 64Mi — путь к OOMKill, а кольцо и есть хранилище
+// доказательств дриллов. 4 MiB на порядок больше реального объёма (200 уведомлений
+// по ~2 КБ ≈ 400 КБ) и переживает один крупный payload.
+export const TIMELINE_MAX_BYTES = 4 * 1024 * 1024;
 // Границы payload: alertname становится меткой Prometheus (alertsink_alert_events_total),
 // а число алертов — числом серий и записей кольца. Без лимитов любой под в кластере
 // POST'ом создаёт произвольную кардинальность (нашло ревью 2026-11-04).
@@ -33,6 +39,23 @@ const SEVERITY_RANK = new Map([
   ['warning', 1],
   ['info', 2],
 ]);
+
+// Маршрут для метрики — только из фиксированного набора: путь в запросе задаёт
+// клиент, и как метка Prometheus он дал бы неограниченную кардинальность.
+const KNOWN_ROUTES = new Set(['/webhook', '/timeline', '/metrics', '/healthz']);
+
+function routeKind(pathname) {
+  return KNOWN_ROUTES.has(pathname) ? pathname : 'other';
+}
+
+// Исход запроса по коду ответа; 499 — обрыв клиента (соглашение nginx), в логах
+// он отмечается отдельно, потому что ответа клиенту в этом случае нет.
+function outcomeOf(status) {
+  if (status === 499) return 'aborted';
+  if (status < 400) return 'ok';
+  if (status < 500) return 'client_error';
+  return 'server_error';
+}
 
 // Одна JSON-строка на событие в stdout — тот же формат, что у demo-api/demo-load,
 // чтобы логи трёх сервисов разбирались в Loki одинаково.
@@ -65,7 +88,17 @@ export function createMetrics() {
     registers: [registry],
   });
 
-  return { registry, notifications, alertEvents, lastNotification };
+  // Исходы запросов: без них не отличить «sink отказал» от «Alertmanager не отправил».
+  // Метка route нормализована (см. routeKind): сырой pathname давал бы произвольную
+  // кардинальность — тот же класс дефекта, что чинили в ревью 2026-11-04.
+  const requests = new Counter({
+    name: 'alertsink_requests_total',
+    help: 'HTTP-запросы sink по нормализованному маршруту и исходу',
+    labelNames: ['route', 'outcome'],
+    registers: [registry],
+  });
+
+  return { registry, notifications, alertEvents, lastNotification, requests };
 }
 
 // Валидация обязательных полей Alertmanager v2. Возвращает текст ошибки или null:
@@ -122,6 +155,13 @@ function buildEntry(payload, receivedAt) {
     received_at: receivedAt.toISOString(),
     status: payload.status,
     group_key: typeof payload.groupKey === 'string' ? payload.groupKey : '',
+    // Alertmanager усекает группу по maxAlerts: 50 и присылает, сколько алертов
+    // отброшено. Без поля /timeline выглядит полным, и evidence дрилла мог бы
+    // сослаться на неполный набор. 0 — поля нет или оно не положительное число.
+    truncated_alerts:
+      Number.isInteger(payload.truncatedAlerts) && payload.truncatedAlerts > 0
+        ? payload.truncatedAlerts
+        : 0,
     alerts: payload.alerts.map((alert) => ({
       name: alert.labels.alertname,
       status: alert.status,
@@ -167,12 +207,24 @@ export function createApp({ logStream = process.stdout, clock = () => new Date()
   const metrics = createMetrics();
   const log = createLogger(logStream);
   const timeline = [];
+  // Размеры записей в байтах — параллельный массив: кольцо держим по двум пределам
+  // (число записей и байты), не меняя публичную форму записи /timeline.
+  const timelineSizes = [];
+  let timelineBytes = 0;
 
   const record = (payload) => {
     const receivedAt = clock();
     const entry = buildEntry(payload, receivedAt);
+    const entryBytes = Buffer.byteLength(JSON.stringify(entry), 'utf8');
     timeline.push(entry);
-    if (timeline.length > TIMELINE_SIZE) timeline.shift();
+    timelineSizes.push(entryBytes);
+    timelineBytes += entryBytes;
+    // Вытесняем по любому из пределов; последнюю запись держим всегда, иначе
+    // одиночное уведомление больше бюджета стёрло бы само себя.
+    while (timeline.length > TIMELINE_SIZE || (timelineBytes > TIMELINE_MAX_BYTES && timeline.length > 1)) {
+      timelineBytes -= timelineSizes.shift();
+      timeline.shift();
+    }
 
     const severity = topSeverity(payload.alerts);
     metrics.notifications.inc({ status: payload.status, severity });
@@ -201,6 +253,8 @@ export function createApp({ logStream = process.stdout, clock = () => new Date()
 
     const respond = (code, body, headers = {}) => {
       status = code;
+      // Обрыв клиента: сокет уже уничтожен, писать в него нечего и некому.
+      if (res.destroyed) return;
       res.writeHead(code, { 'content-type': 'text/plain; charset=utf-8', ...headers });
       res.end(body);
     };
@@ -232,6 +286,14 @@ export function createApp({ logStream = process.stdout, clock = () => new Date()
             if (err instanceof BodyTooLargeError) {
               log('warn', 'webhook_body_too_large', { limit: MAX_BODY_BYTES, error: err.message });
               respond(413, 'payload too large\n');
+              return;
+            }
+            // Клиент ушёл посреди тела (проверено: req/res destroyed, ECONNRESET).
+            // Это не отказ sink, и 500 в логе сбивал бы разбор недоставки; отвечать
+            // некому, поэтому только отметка 499 — соглашение nginx «client closed».
+            if (res.destroyed) {
+              log('warn', 'request_aborted', { route: pathname });
+              status = 499;
               return;
             }
             throw err;
@@ -267,6 +329,11 @@ export function createApp({ logStream = process.stdout, clock = () => new Date()
         respond(404, 'not found\n');
       }
     } catch (err) {
+      if (res.destroyed) {
+        log('warn', 'request_aborted', { route });
+        status = 499;
+        return;
+      }
       log('error', 'request_failed', { error: err?.message ?? String(err), route });
       if (!res.headersSent) respond(500, 'internal error\n');
     } finally {
@@ -277,6 +344,9 @@ export function createApp({ logStream = process.stdout, clock = () => new Date()
         status,
         duration_ms: Math.round(durationSeconds * 1000),
       });
+      // route здесь — уже нормализованный набор (или 'invalid' для мусорного
+      // request-target): сырой путь не должен попадать в метку.
+      metrics.requests.inc({ route: route === 'invalid' ? 'invalid' : routeKind(route), outcome: outcomeOf(status) });
     }
   });
 
@@ -295,6 +365,7 @@ function start() {
     app.log('info', 'sink_started', {
       port: app.server.address().port,
       timeline_size: TIMELINE_SIZE,
+      timeline_max_bytes: TIMELINE_MAX_BYTES,
       max_body_bytes: MAX_BODY_BYTES,
     });
   });

@@ -6,7 +6,14 @@ import { once } from 'node:events';
 import net from 'node:net';
 import { test } from 'node:test';
 
-import { createApp, MAX_ALERTS, MAX_ALERTNAME_LENGTH, MAX_BODY_BYTES, TIMELINE_SIZE } from '../src/sink.js';
+import {
+  createApp,
+  MAX_ALERTS,
+  MAX_ALERTNAME_LENGTH,
+  MAX_BODY_BYTES,
+  TIMELINE_MAX_BYTES,
+  TIMELINE_SIZE,
+} from '../src/sink.js';
 
 const FIRING_PAYLOAD = {
   version: '4',
@@ -199,6 +206,79 @@ test(`кольцо /timeline хранит последние ${TIMELINE_SIZE} у
   assert.equal(timeline.length, TIMELINE_SIZE);
   assert.equal(timeline[0].group_key, `group-${total - TIMELINE_SIZE}`);
   assert.equal(timeline.at(-1).group_key, `group-${total - 1}`);
+});
+
+test(`кольцо /timeline ограничено и по байтам (${TIMELINE_MAX_BYTES} B), не только по записям`, async (t) => {
+  const { base } = await startApp(t);
+  // Одна метка на ~300 КБ: тело каждого запроса меньше MAX_BODY_BYTES, но 20 таких
+  // записей — ~6 МБ, то есть заведомо больше бюджета кольца.
+  const blob = 'x'.repeat(300 * 1024);
+  const posts = 20;
+  for (let i = 0; i < posts; i += 1) {
+    const response = await postWebhook(base, {
+      ...FIRING_PAYLOAD,
+      groupKey: `big-${i}`,
+      alerts: [{ status: 'firing', labels: { alertname: 'BigPayload', blob } }],
+    });
+    assert.equal(response.status, 200);
+  }
+  const timeline = await (await fetch(`${base}/timeline`)).json();
+  assert.ok(timeline.length < posts, `старые записи должны вытесняться, а их ${timeline.length}`);
+  // Последняя запись остаётся всегда: даже один payload больше бюджета не стирает себя.
+  assert.equal(timeline.at(-1).group_key, `big-${posts - 1}`);
+  const bytes = timeline.reduce((sum, entry) => sum + Buffer.byteLength(JSON.stringify(entry), 'utf8'), 0);
+  assert.ok(bytes <= TIMELINE_MAX_BYTES, `кольцо занимает ${bytes} B при бюджете ${TIMELINE_MAX_BYTES} B`);
+});
+
+test('truncated_alerts из payload виден в записи /timeline (по умолчанию 0)', async (t) => {
+  const { base } = await startApp(t);
+  await postWebhook(base, { ...FIRING_PAYLOAD, truncatedAlerts: 7 });
+  await postWebhook(base, { ...FIRING_PAYLOAD, groupKey: 'group-without-truncation' });
+  const timeline = await (await fetch(`${base}/timeline`)).json();
+  assert.equal(timeline[0].truncated_alerts, 7);
+  assert.equal(timeline[1].truncated_alerts, 0);
+});
+
+test('обрыв клиента посреди тела: лог request_aborted, метрика aborted, процесса жив', async (t) => {
+  const { base, app, logs } = await startApp(t);
+  const socket = net.connect(app.server.address().port, '127.0.0.1', () => {
+    socket.write(
+      'POST /webhook HTTP/1.1\r\nHost: test\r\nContent-Type: application/json\r\nContent-Length: 1000\r\n\r\n{"status":',
+    );
+    setTimeout(() => socket.destroy(), 30);
+  });
+  socket.on('error', () => {});
+
+  // Ждём, пока сервер обработает обрыв (опрос вместо фиксированной паузы).
+  let metric = '';
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    metric = await (await fetch(`${base}/metrics`)).text();
+    if (metricValue(metric, 'alertsink_requests_total', { route: '/webhook', outcome: 'aborted' }) > 0) break;
+  }
+  assert.equal(metricValue(metric, 'alertsink_requests_total', { route: '/webhook', outcome: 'aborted' }), 1);
+  assert.equal((await fetch(`${base}/healthz`)).status, 200);
+
+  const entries = logs
+    .map((chunk) => chunk.trim())
+    .filter(Boolean)
+    .map((chunk) => JSON.parse(chunk));
+  assert.equal(entries.filter((entry) => entry.msg === 'request_aborted').length, 1);
+  // Обрыв клиента — не отказ сервера: 500 в логе сбивал бы разбор недоставки.
+  assert.equal(entries.filter((entry) => entry.msg === 'request_failed').length, 0);
+  const webhookLogs = entries.filter((entry) => entry.msg === 'http_request' && entry.route === '/webhook');
+  assert.equal(webhookLogs.at(-1).status, 499);
+});
+
+test('метрика запросов: маршруты нормализованы, произвольный путь не создаёт серий', async (t) => {
+  const { base } = await startApp(t);
+  const token = `nope-${Math.random().toString(16).slice(2, 10)}`;
+  assert.equal((await fetch(`${base}/${token}`)).status, 404);
+  assert.equal((await fetch(`${base}/healthz`)).status, 200);
+  const body = await (await fetch(`${base}/metrics`)).text();
+  assert.equal(metricValue(body, 'alertsink_requests_total', { route: 'other', outcome: 'client_error' }), 1);
+  assert.equal(metricValue(body, 'alertsink_requests_total', { route: '/healthz', outcome: 'ok' }), 1);
+  assert.ok(!body.includes(token), 'сырой путь не должен попадать в метки Prometheus');
 });
 
 test('служебные маршруты: /healthz, 404, 405 и JSON-логи', async (t) => {
