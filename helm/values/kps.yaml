@@ -3,6 +3,8 @@
 # (каталог лабы удалён); retention 24h→72h, Boutique удалён.
 # Состав ПОЛНЫЙ (prometheus+grafana+alertmanager — ничего не выключаем upfront),
 # ужаты только retention/storage/интервалы/ресурсы. Пин чарта: 92.14.1.
+# Исключение 2026-11-04: выключены kube-controller-manager, kube-scheduler и
+# kube-proxy — их в k3s нет как отдельных целей (см. блок в конце файла).
 # Порядок урезания при красных замерах — см. план окна (retention→лимиты→alertmanager).
 # Источник дефолтов: prometheus-community/kube-prometheus-stack 92.14.1 (values.yaml).
 
@@ -96,3 +98,20 @@ nodeExporter:
     limits:
       cpu: 100m
       memory: 64Mi
+
+# 2026-11-04: этих компонентов в k3s нет как отдельных целей — controller-manager,
+# scheduler и kube-proxy живут внутри процессов k3s-server/k3s-agent и слушают
+# 127.0.0.1, поэтому эндпоинтов у Service чарта нет. Следствие без этого блока:
+# `absent(up{job="kube-controller-manager"})` и родственные выражения истинны всегда,
+# и KubeControllerManagerDown / KubeSchedulerDown / KubeProxyDown (severity: critical)
+# горят вечно. Их шум доходил до alert-sink и мешал доказательствам дриллов (фаза 6)
+# и критерию приёмки «нет незапланированных алертов» (фаза 7).
+# Выключаем именно эти три компонента: их метрик у нас никогда не было (`up`-серий
+# не существовало), терять нечего. Проверяется офлайн-рендером: исчезают 3
+# ServiceMonitor, 3 Service, 4 объекта PrometheusRule (6 алертов) и 3 пустых дашборда.
+kubeControllerManager:
+  enabled: false
+kubeScheduler:
+  enabled: false
+kubeProxy:
+  enabled: false
