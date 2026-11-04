@@ -28,3 +28,82 @@ tests:
                 оператор ещё не перезагрузил правило. Пока это так, burn-rate
                 алерты по SLO молчат — тишина не означает «всё хорошо».
               runbook_url: "docs/runbook.md"
+
+  # SloDemoNoTraffic смотрит не на slo:*, а на сырые метрики нагрузки, поэтому
+  # его кейсы моделируются теми же метриками, что и в demo-slo.yaml: up и
+  # load_requests_total. Записанных slo:* здесь нет ни в одном кейсе — это не
+  # влияет на результат, но и не мешает.
+  - name: "demo-load жив, но трафика нет: SloDemoNoTraffic загорается"
+    interval: 1m
+    input_series:
+      - series: 'up{job="demo-load"}'
+        values: '1x40'
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: SloDemoNoTraffic
+        exp_alerts:
+          - exp_labels:
+              severity: info
+              service: demo-api
+              namespace: demo
+            exp_annotations:
+              summary: "demo-api: SLI считается без трафика нагрузки"
+              description: >-
+                demo-load жив (up=1), но за последние 10 минут не отправил ни одного
+                запроса — либо цель demo-load пропала из Prometheus совсем. Записанные
+                серии slo:* при этом не пустеют: при нулевой скорости они дают NaN или 1,
+                поэтому дашборд выглядит зелёным, хотя оценивать нечего. Проверь под
+                demo-load, его логи и load_ticks_skipped_total, а также конфиг toxiproxy.
+              runbook_url: "docs/runbook.md"
+
+  - name: "нагрузка идёт: SloDemoNoTraffic молчит"
+    interval: 1m
+    input_series:
+      - series: 'up{job="demo-load"}'
+        values: '1x40'
+      - series: 'load_requests_total{job="demo-load",outcome="ok"}'
+        values: '0+10x60'
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: SloDemoNoTraffic
+        exp_alerts: []
+
+  # Ключевая граница: «нет трафика» и «сервис лежит» — разные события. Пока
+  # генератор шлёт запросы и получает отказы, SLO обязано считать бюджет
+  # доступности, а мета-алерт молчит, иначе он подменил бы собой SLO-алерт.
+  - name: "demo-api лежит, генератор шлёт ошибки: SloDemoNoTraffic молчит"
+    interval: 1m
+    input_series:
+      - series: 'up{job="demo-load"}'
+        values: '1x40'
+      - series: 'up{job="demo-api"}'
+        values: '0x40'
+      - series: 'load_requests_total{job="demo-load",outcome="error"}'
+        values: '0+10x60'
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: SloDemoNoTraffic
+        exp_alerts: []
+
+  - name: "цели demo-load нет вовсе: SloDemoNoTraffic загорается"
+    interval: 1m
+    input_series:
+      - series: 'up{job="demo-api"}'
+        values: '1x40'
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: SloDemoNoTraffic
+        exp_alerts:
+          - exp_labels:
+              severity: info
+              service: demo-api
+              namespace: demo
+            exp_annotations:
+              summary: "demo-api: SLI считается без трафика нагрузки"
+              description: >-
+                demo-load жив (up=1), но за последние 10 минут не отправил ни одного
+                запроса — либо цель demo-load пропала из Prometheus совсем. Записанные
+                серии slo:* при этом не пустеют: при нулевой скорости они дают NaN или 1,
+                поэтому дашборд выглядит зелёным, хотя оценивать нечего. Проверь под
+                demo-load, его логи и load_ticks_skipped_total, а также конфиг toxiproxy.
+              runbook_url: "docs/runbook.md"

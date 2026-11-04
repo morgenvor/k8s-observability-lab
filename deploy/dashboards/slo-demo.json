@@ -30,7 +30,7 @@
         "iconColor": "red",
         "expr": "ALERTS{alertstate=\"firing\", service=\"demo-api\"}",
         "tagKeys": "alertname",
-        "titleFormat": "{{alertname}}",
+        "titleFormat": "{{alertname}} · {{slo}}",
         "textFormat": "{{severity}}"
       }
     ]
