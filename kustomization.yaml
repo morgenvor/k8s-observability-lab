@@ -3,10 +3,12 @@ kind: Kustomization
 # Свои манифесты проекта одним `kubectl apply -k .` (фазы v1.0):
 # deploy/base — namespace demo, приложения, toxiproxy, ServiceMonitor (фаза 2);
 # deploy/dashboards — ConfigMap дашбордов в monitoring (фаза 2);
+# deploy/monitoring — AlertmanagerConfig в monitoring (фаза 4);
 # rules — PrometheusRule (фаза 3).
 resources:
   - deploy/base
   - deploy/dashboards
+  - deploy/monitoring
   - rules
 
 # Теги своих образов проставляет scripts/deploy.sh (оверлей в .tmp с тегом = git SHA);

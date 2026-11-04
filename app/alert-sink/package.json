@@ -1,0 +1,17 @@
+{
+  "name": "alert-sink",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Приёмник уведомлений Alertmanager: webhook, кольцо последних уведомлений, метрики доставки",
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "start": "node src/sink.js",
+    "test": "node --test"
+  },
+  "dependencies": {
+    "prom-client": "15.1.3"
+  }
+}

@@ -39,6 +39,7 @@ kubectl apply -f "${RENDERED}"
 info "ожидание rollout"
 kubectl -n demo rollout status deploy/demo-api --timeout=180s
 kubectl -n demo rollout status deploy/demo-load --timeout=180s
+kubectl -n demo rollout status deploy/alert-sink --timeout=180s
 kubectl -n demo rollout status deploy/toxiproxy --timeout=180s
 
 info "состояние подов и ServiceMonitor"
@@ -72,20 +73,23 @@ for _ in $(seq 1 30); do
 done
 [ "${forward_ready}" -eq 1 ] || die "порт-форвард к Prometheus не поднялся на 127.0.0.1:${PROM_PORT}"
 
-# Гейт проверяет три вещи по отдельности, а не «сколько-то целей живы»:
+# Гейт проверяет четыре вещи по отдельности, а не «сколько-то целей живы»:
 #  1) оба эндпоинта demo-api (2 реплики) скрейпятся;
 #  2) demo-load скрейпится (иначе пропажа его ServiceMonitor прошла бы незамеченной);
-#  3) нагрузка реально доходит до demo-api — up=1 ничего не говорит о работоспособности
+#  3) alert-sink скрейпится: без этой проверки пропажа ServiceMonitor/alert-sink
+#     оставила бы метрики доставки только в самом сервисе (фаза 4);
+#  4) нагрузка реально доходит до demo-api — up=1 ничего не говорит о работоспособности
 #     пути demo-load → toxiproxy → demo-api (инцидент с конфигом toxiproxy 2026-11-03
 #     давал up=1 при 100 % ошибок у клиента).
 info "ожидание целей и живого трафика (до ${WAIT_TARGETS} с)"
 deadline=$((SECONDS + WAIT_TARGETS))
-api_up=""; load_up=""; ok_rate=""
+api_up=""; load_up=""; sink_up=""; ok_rate=""
 while [ "${SECONDS}" -lt "${deadline}" ]; do
   api_up="$(prom_scalar 'count(up{job="demo-api"} == 1)')"
   load_up="$(prom_scalar 'count(up{job="demo-load"} == 1)')"
+  sink_up="$(prom_scalar 'count(up{job="alert-sink"} == 1)')"
   ok_rate="$(prom_scalar 'sum(rate(load_requests_total{outcome="ok"}[2m]))')"
-  if [ "${api_up:-0}" -ge 2 ] && [ "${load_up:-0}" -ge 1 ] \
+  if [ "${api_up:-0}" -ge 2 ] && [ "${load_up:-0}" -ge 1 ] && [ "${sink_up:-0}" -ge 1 ] \
       && awk "BEGIN{exit !(${ok_rate:-0} > 0)}"; then
     break
   fi
@@ -94,9 +98,10 @@ done
 
 [ "${api_up:-0}" -ge 2 ] || die "demo-api: up==1 у ${api_up:-0} эндпоинтов (нужно 2); проверь поды и ServiceMonitor (метка release=monitoring)"
 [ "${load_up:-0}" -ge 1 ] || die "demo-load: up==1 у ${load_up:-0} целей (нужно 1); проверь ServiceMonitor/demo-load"
+[ "${sink_up:-0}" -ge 1 ] || die "alert-sink: up==1 у ${sink_up:-0} целей (нужно 1); проверь ServiceMonitor/alert-sink и под alert-sink"
 awk "BEGIN{exit !(${ok_rate:-0} > 0)}" \
   || die "нагрузка не доходит до demo-api: rate(load_requests_total{outcome=\"ok\"}) = ${ok_rate:-0}; проверь toxiproxy (прокси demo-api:12001 → demo-api:8080) и TARGET_URL"
-info "цели живы (demo-api ${api_up}, demo-load ${load_up}), ok-трафик ${ok_rate} rps"
+info "цели живы (demo-api ${api_up}, demo-load ${load_up}, alert-sink ${sink_up}), ok-трафик ${ok_rate} rps"
 
 # Правила приезжают тем же apply, но подхватывает их оператор: без этой проверки
 # PrometheusRule без метки release=monitoring или с падающей группой доехал бы

@@ -48,6 +48,13 @@ alertmanager:
   enabled: true
   alertmanagerSpec:
     retention: 24h
+    # 2026-11-04 (фаза 4): обязательно, иначе AlertmanagerConfig из monitoring
+    # получает матчер namespace="monitoring" (дефолт operator v0.94.2 —
+    # OnNamespace), и алерты из demo в наш webhook не попадут. Проверяется
+    # сгенерированным конфигом: kubectl -n monitoring get secret
+    # alertmanager-monitoring-kube-prometheus-alertmanager-generated -o jsonpath=…
+    alertmanagerConfigMatcherStrategy:
+      type: None
     storage:
       volumeClaimTemplate:
         spec:

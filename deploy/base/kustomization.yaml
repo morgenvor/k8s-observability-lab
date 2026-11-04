@@ -5,6 +5,7 @@ resources:
   - namespace.yaml
   - demo-api.yaml
   - demo-load.yaml
+  - alert-sink.yaml
   - toxiproxy.yaml
   - servicemonitors.yaml
 

@@ -1,0 +1,86 @@
+# alert-sink: приёмник уведомлений Alertmanager (фаза 4). Стоит в demo рядом с
+# фикстурой: он часть демо-контура, а не стека мониторинга, и не должен переживать
+# пересоздание monitoring. AlertmanagerConfig, который на него ссылается, живёт в
+# monitoring — там его ищет оператор.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: alert-sink
+  labels:
+    app: alert-sink
+    app.kubernetes.io/name: alert-sink
+    app.kubernetes.io/part-of: k8s-observability-lab
+spec:
+  # Одна реплика: приёмник алертов — не сервис под нагрузкой, а журнал доставки.
+  # Кольцо /timeline живёт в памяти одного пода, поэтому при двух репликах дрилл
+  # увидел бы только половину уведомлений (липкость не настроена намеренно).
+  replicas: 1
+  selector:
+    matchLabels:
+      app: alert-sink
+  template:
+    metadata:
+      labels:
+        app: alert-sink
+        app.kubernetes.io/name: alert-sink
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: alert-sink
+          image: alert-sink:local
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+          env:
+            - name: PORT
+              value: "8080"
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            periodSeconds: 5
+            timeoutSeconds: 2
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 2
+            failureThreshold: 3
+          resources:
+            requests:
+              cpu: 20m
+              memory: 32Mi
+            limits:
+              cpu: 100m
+              memory: 64Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop: ["ALL"]
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: alert-sink
+  labels:
+    app: alert-sink
+    app.kubernetes.io/name: alert-sink
+spec:
+  selector:
+    app: alert-sink
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
+      protocol: TCP

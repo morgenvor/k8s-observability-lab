@@ -1,0 +1,31 @@
+apiVersion: monitoring.coreos.com/v1
+kind: AlertmanagerConfig
+metadata:
+  name: demo-notifications
+  labels:
+    app.kubernetes.io/name: demo-notifications
+    app.kubernetes.io/part-of: k8s-observability-lab
+# Маршрут уведомлений демо-контура: всё, что сгенерировал Alertmanager, уходит в
+# alert-sink (webhook в namespace demo). Email/SMTP и секретов нет намеренно —
+# получателя в проекте изображает сервис, а не человек.
+#
+# Поля CRD camelCase (groupBy/groupWait/...), а не snake_case из плана: так описана
+# схема AlertmanagerConfig, и оператор читает именно её.
+spec:
+  # Пустых матчеров нет: маршрут ловит все алерты, включая Watchdog чарта — он же
+  # и служит доказательством, что доставка работает end-to-end.
+  route:
+    receiver: alert-sink
+    # service есть у SLO-алертов, у инфраструктурных его нет: группировка по
+    # отсутствующей метке даёт пустое значение, это штатное поведение Alertmanager.
+    groupBy: [alertname, service]
+    groupWait: 10s
+    groupInterval: 30s
+    repeatInterval: 4h
+  receivers:
+    - name: alert-sink
+      webhookConfigs:
+        - url: http://alert-sink.demo.svc.cluster.local:8080/webhook
+          # resolved тоже отправляем: без него в /timeline не видно закрытия алерта,
+          # а дрилл фазы 6 проверяет именно пару firing → resolved.
+          sendResolved: true
