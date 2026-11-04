@@ -1,6 +1,7 @@
 # Values Grafana Loki для лабы: одна реплика SingleBinary, файловая система, retention 72h.
-# Чарт: grafana/loki 7.5.0 (app 3.6.16) — пин в helmfile.yaml. Источник дефолтов:
-# values.yaml чарта 7.5.0.
+# Чарт: grafana/loki 7.5.0 — пин в helmfile.yaml. Источник дефолтов: values.yaml чарта
+# 7.5.0. Важно: appVersion чарта 3.6.16, а его values пинят образ тегом 3.6.11 — образ
+# ниже задан явно, чтобы смена чарта не меняла образ молча (registry в лабе нет).
 #
 # Почему SingleBinary: в лабе 2 ноды по ~2,9–3,8 GiB и один тенант без HA. SimpleScalable
 # (read/write/backend) требует объектного хранилища, а MinIO в лабе не поднимаем —
@@ -12,6 +13,10 @@ deploymentMode: SingleBinary
 loki:
   # Один тенант: X-Scope-OrgID и заголовки не нужны ни Alloy, ни Grafana.
   auth_enabled: false
+  # Образ пиннится тегом: 3.6.11 — версия, с которой чарт 7.5.0 поставляется, и та,
+  # что импортирована в containerd лабы. Новая версия = правка здесь + IMPORT_IMAGES.
+  image:
+    tag: 3.6.11
   commonConfig:
     # Одна реплика = один писатель; иначе Loki ждёт кворум и не стартует.
     replication_factor: 1
@@ -42,7 +47,7 @@ loki:
     delete_request_store: filesystem
     working_directory: /var/loki/compactor
 
-# Один под: 2 GB на чанки+индекс с запасом под 72 ч логов демо-контура.
+# Один под на PVC 5Gi (см. AGENTS) под 72 ч логов демо-контура.
 singleBinary:
   replicas: 1
   resources:
@@ -53,6 +58,9 @@ singleBinary:
       cpu: 500m
       memory: 512Mi
   persistence:
+    # Явно, хотя дефолт чарта — true: PVC 5Gi и его удаление при destroy — часть
+    # контракта отката фазы 5, а не случайная деталь values.
+    enabled: true
     size: 5Gi
 
 # Таргеты SimpleScalable (read/write/backend) в values чарта по умолчанию = 3 реплики,

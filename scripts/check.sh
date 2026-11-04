@@ -66,6 +66,30 @@ helmfile -f helmfile.yaml template > .tmp/rendered/helmfile.yaml
 [ -s .tmp/rendered/helmfile.yaml ] || die "рендер helmfile пуст — проверь releases в helmfile.yaml"
 kubeconform -strict -ignore-missing-schemas -summary -output text .tmp/rendered/helmfile.yaml
 
+# --- 3a. Семантика значений Loki/Alloy: kubeconform видит только структуру ----
+# Гарантии фазы 5 иначе держатся на ручном прогоне бинарей (правило 10), а смена
+# ключа чартом или опечатка в values уехала бы в кластер молча.
+step "семантика значений Loki/Alloy в рендере"
+grep -q 'retention_period: 72h' .tmp/rendered/helmfile.yaml \
+  || die "в рендере нет limits_config.retention_period: 72h (helm/values/loki.yaml)"
+grep -q 'retention_enabled: true' .tmp/rendered/helmfile.yaml \
+  || die "в рендере нет compactor.retention_enabled: true — retention не применяется"
+grep -q 'delete_request_store: filesystem' .tmp/rendered/helmfile.yaml \
+  || die "в рендере нет compactor.delete_request_store — Loki 3.x не стартует с retention"
+# В конфиге Alloy это не YAML-пара, а `url = "…"`, поэтому проверяем сам адрес.
+grep -q 'loki.monitoring.svc:3100/loki/api/v1/push' .tmp/rendered/helmfile.yaml \
+  || die "в рендере нет loki.write на loki.monitoring.svc:3100 (helm/values/alloy.yaml)"
+# Каждая реплика Alloy обязана читать только свою ноду, иначе логи собираются дважды.
+grep -q '__meta_kubernetes_pod_node_name' .tmp/rendered/helmfile.yaml \
+  || die "в конфиге Alloy нет фильтра по ноде — DaemonSet будет читать все поды каждой репликой"
+# Выключенное в values не должно появиться в рендере.
+for disabled in loki-canary chunks-cache results-cache; do
+  if grep -q "${disabled}" .tmp/rendered/helmfile.yaml; then
+    die "в рендере есть ${disabled}: соответствующее выключение в helm/values/loki.yaml перестало работать"
+  fi
+done
+printf 'ассерты Loki/Alloy: ok\n'
+
 # --- 4. Свои манифесты: kustomize + kubeconform ------------------------------
 step "kubectl kustomize . -> kubeconform"
 kubectl kustomize . > .tmp/rendered/kustomize.yaml

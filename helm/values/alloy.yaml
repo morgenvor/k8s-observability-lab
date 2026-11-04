@@ -1,16 +1,19 @@
 # Values Grafana Alloy для лабы: DaemonSet, логи подов через Kubernetes API.
-# Чарт: grafana/alloy 1.15.0 (app v1.21.3) — пин в helmfile.yaml.
+# Чарт: grafana/alloy 1.15.0 (app v1.21.3) — пин чарта в helmfile.yaml, образ пинится ниже.
 #
 # Почему loki.source.kubernetes, а не loki.source.file по hostPath /var/log/pods:
 # hostPath требует root/privileged и привязывает конфиг к раскладке containerd ноды.
-# API-путь работает от обычного ServiceAccount с RBAC (`pods`, `pods/log`), который
-# чарт создаёт сам (см. rbac.rules ниже — дефолт чарта, править не нужно).
+# API-путь работает от обычного ServiceAccount с RBAC по `pods`/`pods/log`.
 alloy:
   configMap:
     content: |
-      // Источник — все поды кластера, дальше фильтруем по namespace.
+      // Поды-цели берём только в двух namespace: kube-system в 5 GiB и 72 ч не
+      // помещается и для дриллов не нужен.
       discovery.kubernetes "pods" {
         role = "pod"
+        namespaces {
+          names = ["demo", "monitoring"]
+        }
       }
 
       // Метки низкой кардинальности. Всё, что не перечислено (pod_template_hash,
@@ -20,11 +23,20 @@ alloy:
       discovery.relabel "pod_logs" {
         targets = discovery.kubernetes.pods.targets
 
-        // Логи нужны для дриллов и для самой наблюдаемости: kube-system в 5 GiB
-        // с retention 72h не поместится и не нужен.
+        // Регекспы ниже анкорятся целиком (семантика relabel): "demo|monitoring"
+        // совпадает только с этими двумя именами, а не с "demo-2".
         rule {
           source_labels = ["__meta_kubernetes_namespace"]
           regex         = "demo|monitoring"
+          action        = "keep"
+        }
+        // Каждая реплика читает только поды своей ноды. Без этого правила все поды
+        // DaemonSet'а видят один и тот же список подов кластера и читают логи дважды
+        // (факт 2026-11-04: 24–25 targets на каждой реплике при ~13 подах).
+        // K8S_NODE_NAME чарт подаёт из spec.nodeName.
+        rule {
+          source_labels = ["__meta_kubernetes_pod_node_name"]
+          regex         = sys.env("K8S_NODE_NAME")
           action        = "keep"
         }
         rule {
@@ -65,20 +77,86 @@ alloy:
       loki.write "local" {
         endpoint {
           // SingleBinary: gateway в Loki выключен, пишем прямо в его Service.
+          // Второй экземпляр адреса — datasource Grafana в helm/values/kps.yaml.
           url = "http://loki.monitoring.svc:3100/loki/api/v1/push"
         }
       }
-  # Даже BestEffort-Alloy на ноде с ~300 Mi запаса может быть вытеснен первым;
+  # Образ пиннится тегом: registry в лабе нет, и молчаливая смена образа при
+  # обновлении чарта даёт ImagePullBackOff (этот сценарий уже был). Новая версия —
+  # правка здесь + IMPORT_IMAGES в scripts/import-image.sh.
+  image:
+    tag: v1.21.3
+  # Даже BestEffort-Alloy на ноде с ~1 Gi запаса может быть вытеснен первым;
   # запросы маленькие, лимит держит OOM под контролем (план: 500–700 Mi на Loki+Alloy).
+  # Лимит 192Mi оказался впритык: живой замер после фильтра по ноде дал 137–154 Mi
+  # в контейнере alloy (≈80 % лимита) — подняли до 256Mi, чтобы дриллы фазы 6 не
+  # ловили OOMKill на ровном месте.
   resources:
     requests:
       cpu: 50m
       memory: 64Mi
     limits:
       cpu: 200m
-      memory: 192Mi
+      memory: 256Mi
+  # Контейнер Alloy в образе не задаёт USER, поэтому без этого блока под работает
+  # root'ом — вопреки «без hostPath и root» в AGENTS/runbook. Повторяем hardening,
+  # который чарт уже применяет к config-reloader (UID/GID 65534).
+  securityContext:
+    allowPrivilegeEscalation: false
+    capabilities:
+      drop: ["ALL"]
+    readOnlyRootFilesystem: true
+    runAsGroup: 65534
+    runAsNonRoot: true
+    runAsUser: 65534
+    seccompProfile:
+      type: RuntimeDefault
+  # Позиции чтения (--storage.path=/tmp/alloy) при readOnlyRootFilesystem требуют
+  # writable-тома. Он emptyDir: после рестарта пода Alloy перечитывает логи контейнеров
+  # с начала, а Loki отбрасывает старое как «entry too far behind» (шум, не потеря).
+  mounts:
+    extra:
+      - name: alloy-data
+        mountPath: /tmp/alloy
 
-# DaemonSet — дефолт чарта, фиксируем явно: одна реплика на ноду читает свои поды,
-# при вытеснении ноды логи остальных продолжает собирать второй Alloy.
+# Pod-level hardening для обоих контейнеров пода (alloy + config-reloader).
+global:
+  podSecurityContext:
+    fsGroup: 65534
+    runAsGroup: 65534
+    runAsNonRoot: true
+    runAsUser: 65534
+    seccompProfile:
+      type: RuntimeDefault
+
+# DaemonSet — дефолт чарта, фиксируем явно: одна реплика на ноду читает логи подов
+# этой ноды (фильтр по __meta_kubernetes_pod_node_name в конфиге выше).
 controller:
   type: daemonset
+  volumes:
+    extra:
+      - name: alloy-data
+        emptyDir: {}
+
+# Дефолтный ClusterRole чарта шире, чем нужно: в `rbac.rules` он даёт cluster-wide
+# `secrets`, `configmaps`, CRD monitoring.coreos.com и ещё десяток ресурсов. Для
+# discovery.kubernetes(role=pod) и loki.source.kubernetes хватает чтения подов и их
+# логов — оставляем одно правило.
+# Ограничение чарта 1.15.0: `rbac.clusterRules: []` ломает рендер (шаблон rbac.yaml
+# дописывает `[]` в конец списка rules → невалидный YAML). Поэтому clusterRules
+# остаются дефолтными: это read-only `nodes`, `nodes/pods`, `nodes/metrics` и
+# nonResourceURL `/metrics`. Секретов и configmaps там нет — риск ограничен чтением
+# метрик узлов, которые мы не используем.
+rbac:
+  create: true
+  namespaces: []
+  rules:
+    - apiGroups: [""]
+      resources: ["pods", "pods/log", "namespaces"]
+      verbs: ["get", "list", "watch"]
+
+# PodLogs CRD не используем (loki.source.podlogs не включён) — не ставим её. Уже
+# установленная предыдущим релизом CRD при смене значения не удаляется: это поведение
+# Helm (`crds/` не управляются после install), чистить отдельным `kubectl delete crd`.
+crds:
+  create: false

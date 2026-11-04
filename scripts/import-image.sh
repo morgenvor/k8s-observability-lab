@@ -50,8 +50,8 @@ for image in "${IMAGES[@]}"; do
     || die "нет локального образа ${image}; сначала ./scripts/build-image.sh (или docker pull для стороннего)"
 done
 
-# docker save пишет tar в stdout, ssh отдаёт его в stdin `k3s ctr images import -`.
-# Стрим не создаёт временный tarball на диске и не требует места под образ.
+# Свои образы малы, их можно гнать стримом (tar в stdout → stdin `k3s ctr images
+# import -`): временный файл на диске не нужен. Крупные сторонние образы — см. ниже.
 import_to_node() {
   local node="$1"
   if [ -n "${IMPORT_IMAGES:-}" ]; then
@@ -60,15 +60,24 @@ import_to_node() {
     # k3s теряет lease etcd и уходит в рестарт (`leaderelection lost`, факт 2026-11-04).
     # Файл на ноде + импорт из локального пути укладываются в ~10 с и API не задевают;
     # образ остаётся неупакованным — CRI распакует его при первом запуске пода.
-    local tar
+    # tar в /tmp весит как образ (до ~700 МБ), поэтому удаляется в каждой ветке —
+    # и при сбое `docker save`/`scp` тоже. Имя на ноде уникально по PID процесса:
+    # два параллельных прогона не затрут друг друга.
+    local tar remote_tar
     tar="$(mktemp "${TMPDIR:-/tmp}/import-images.XXXXXX.tar")"
-    docker save -o "${tar}" "${IMAGES[@]}"
-    scp -q -F "${SSH_CONFIG}" "${SSH_OPTS[@]}" "${tar}" "${node}:/tmp/import-images.tar"
+    remote_tar="/tmp/import-images.$$.tar"
+    if ! docker save -o "${tar}" "${IMAGES[@]}"; then
+      rm -f "${tar}"
+      return 1
+    fi
+    if ! scp -q -F "${SSH_CONFIG}" "${SSH_OPTS[@]}" "${tar}" "${node}:${remote_tar}"; then
+      rm -f "${tar}"
+      return 1
+    fi
     rm -f "${tar}"
     ssh -F "${SSH_CONFIG}" "${SSH_OPTS[@]}" "${node}" \
-      'sudo -n k3s ctr images import --no-unpack /tmp/import-images.tar; rc=$?; rm -f /tmp/import-images.tar; exit $rc' >/dev/null
+      "sudo -n k3s ctr images import --no-unpack ${remote_tar}; rc=\$?; rm -f ${remote_tar}; exit \$rc" >/dev/null
   else
-    # Свои образы малы: стрим без временного tarball на диске.
     docker save "${IMAGES[@]}" \
       | ssh -F "${SSH_CONFIG}" "${SSH_OPTS[@]}" "${node}" 'sudo -n k3s ctr images import -' >/dev/null
   fi
@@ -82,7 +91,9 @@ for node in "${NODES[@]}"; do
     # `../proxmox-lab/CHANGELOG.md`). Это не ошибка ssh/прав: ждём, пока поднимется
     # и API, и containerd ноды (одного API мало — `ctr` в этот момент отвечает
     # «connection refused», так и провалилась первая попытка на control-plane в фазе 5),
-    # и повторяем один раз — блобы уже в content store, повтор идёт быстро.
+    # и повторяем один раз. Повтор дешевле только для стрима (блобы уже в content
+    # store); в файловом режиме он снова делает `docker save` и `scp` — но это один
+    # раз и осознанно, чтобы не оставлять образ без импорта.
     warn "импорт в ${node} не удался; жду API и containerd ноды, повторяю один раз (см. CHANGELOG лабы)"
     ready=0
     for _ in $(seq 1 60); do
@@ -101,14 +112,22 @@ for node in "${NODES[@]}"; do
 done
 
 # Проверка после импорта: тег виден в containerd на каждой ноде.
-# containerd хранит образ с полным именем (docker.io/library/demo-api:тег), поэтому
-# сверяем по суффиксу `(^|/)имя:тег$`, а не строкой целиком: `grep -Fx` не совпадает
-# никогда, и проверка ложно падала после успешного импорта (нашло ревью 2026-11-03).
+# containerd хранит образ с полным именем (docker.io/library/demo-api:тег,
+# docker.io/grafana/loki:тег), поэтому сверяем по суффиксу. Сравнение — glob в `case`,
+# а не regex: точки в теге (3.6.11) не должны превращаться в «любой символ», а кавычки
+# в имени не должны ломать удалённую команду (нашло ревью фазы 5).
 for node in "${NODES[@]}"; do
   info "проверка ${node}"
+  mapfile -t NODE_IMAGES < <(ssh -F "${SSH_CONFIG}" "${SSH_OPTS[@]}" "${node}" 'sudo -n k3s ctr images ls -q')
   for image in "${IMAGES[@]}"; do
-    ssh -F "${SSH_CONFIG}" "${SSH_OPTS[@]}" "${node}" "sudo -n k3s ctr images ls -q | grep -qE '(^|/)${image}\$'" \
-      || die "образ ${image} не найден в containerd на ${node}: импорт не удался"
+    found=0
+    for ref in "${NODE_IMAGES[@]}"; do
+      case "${ref}" in
+        "${image}" | */"${image}") found=1 ;;
+      esac
+      [ "${found}" -eq 1 ] && break
+    done
+    [ "${found}" -eq 1 ] || die "образ ${image} не найден в containerd на ${node}: импорт не удался"
   done
 done
 
