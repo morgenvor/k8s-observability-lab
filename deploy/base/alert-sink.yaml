@@ -24,6 +24,9 @@ spec:
         app: alert-sink
         app.kubernetes.io/name: alert-sink
     spec:
+      # Токен ServiceAccount sink'у не нужен: он принимает данные из сети и ничего
+      # не читает из API (payload от недоверенного отправителя — меньше поверхности).
+      automountServiceAccountToken: false
       securityContext:
         runAsNonRoot: true
         runAsUser: 1000

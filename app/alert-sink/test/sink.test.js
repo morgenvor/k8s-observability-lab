@@ -3,9 +3,10 @@
 // в after-хуке: проверяется поведение по HTTP, а не внутренности функций.
 import assert from 'node:assert/strict';
 import { once } from 'node:events';
+import net from 'node:net';
 import { test } from 'node:test';
 
-import { createApp, MAX_BODY_BYTES, TIMELINE_SIZE } from '../src/sink.js';
+import { createApp, MAX_ALERTS, MAX_ALERTNAME_LENGTH, MAX_BODY_BYTES, TIMELINE_SIZE } from '../src/sink.js';
 
 const FIRING_PAYLOAD = {
   version: '4',
@@ -67,6 +68,23 @@ function metricValue(text, name, labels = {}) {
   return sum;
 }
 
+
+// Сырой HTTP-запрос: fetch не даёт отправить непарсящийся request-target,
+// а именно он ронял процесс (new URL() вне try, правка 2026-11-04).
+function rawRequest(port, payload) {
+  return new Promise((resolve, reject) => {
+    const socket = net.connect(port, '127.0.0.1', () => socket.write(payload));
+    let data = '';
+    socket.setEncoding('utf8');
+    socket.on('data', (chunk) => {
+      data += chunk;
+    });
+    socket.on('error', reject);
+    socket.on('close', () => resolve(data));
+    setTimeout(() => socket.destroy(), 300);
+  });
+}
+
 test('валидное уведомление: 200 и запись в /timeline по контракту', async (t) => {
   const { base } = await startApp(t);
   const response = await postWebhook(base, FIRING_PAYLOAD);
@@ -118,6 +136,16 @@ test('невалидный payload — 400 с причиной, запись н�
     [{ status: 'firing', alerts: [] }, /alerts/],
     [{ status: 'firing', alerts: [{ status: 'firing', labels: {} }] }, /alertname/],
     [{ status: 'firing', alerts: [{ status: 'firing' }] }, /labels/],
+    [{ status: 'firing', alerts: [{ status: 'bogus', labels: { alertname: 'X' } }] }, /alerts\[0\]\.status/],
+    [{ status: 'firing', alerts: ['не объект'] }, /должен быть объектом/],
+    [
+      { status: 'firing', alerts: Array.from({ length: MAX_ALERTS + 1 }, () => ({ status: 'firing', labels: { alertname: 'X' } })) },
+      /больше 200/,
+    ],
+    [
+      { status: 'firing', alerts: [{ status: 'firing', labels: { alertname: 'X'.repeat(MAX_ALERTNAME_LENGTH + 1) } }] },
+      /длиннее 128/,
+    ],
     [[FIRING_PAYLOAD], /JSON-объектом/],
   ];
   for (const [payload, pattern] of cases) {
@@ -191,4 +219,43 @@ test('служебные маршруты: /healthz, 404, 405 и JSON-логи',
   const request = entries.filter((entry) => entry.msg === 'http_request' && entry.route === '/webhook').at(-1);
   assert.equal(request.status, 200);
   assert.equal(typeof request.duration_ms, 'number');
+});
+
+test('мусорный request-target: 400 и процесс жив', async (t) => {
+  const { base, app } = await startApp(t);
+  const response = await rawRequest(
+    app.server.address().port,
+    'GET http://[::1 HTTP/1.1\r\nHost: test\r\n\r\n',
+  );
+  assert.match(response, /^HTTP\/1\.1 400/);
+  // Кольцо /timeline живёт в памяти: падение процесса стёрло бы evidence дрилла.
+  assert.equal((await fetch(`${base}/healthz`)).status, 200);
+});
+
+test('смешанные severity: метка — старшая (page > ticket > info), без severity — none', async (t) => {
+  const { base } = await startApp(t);
+  const alert = (name, severity) => ({
+    status: 'firing',
+    labels: severity === undefined ? { alertname: name } : { alertname: name, severity },
+  });
+  await postWebhook(base, {
+    status: 'firing',
+    alerts: [alert('a-info', 'info'), alert('a-page', 'page'), alert('a-ticket', 'ticket'), alert('a-none')],
+  });
+  const body = await (await fetch(`${base}/metrics`)).text();
+  assert.equal(metricValue(body, 'alertsink_notifications_total', { status: 'firing', severity: 'page' }), 1);
+  assert.equal(metricValue(body, 'alertsink_notifications_total', { status: 'firing', severity: 'ticket' }), 0);
+  assert.equal(metricValue(body, 'alertsink_notifications_total', { status: 'firing', severity: 'info' }), 0);
+  assert.equal(metricValue(body, 'alertsink_notifications_total', { status: 'firing', severity: 'none' }), 0);
+});
+
+test('отклонённое уведомление (400/413) не трогает метрики и кольцо', async (t) => {
+  const { base } = await startApp(t);
+  await postWebhook(base, { status: 'firing', alerts: [] });
+  await postWebhook(base, `{"status":"firing","padding":"${'x'.repeat(MAX_BODY_BYTES)}"}`);
+  const body = await (await fetch(`${base}/metrics`)).text();
+  assert.equal(metricValue(body, 'alertsink_notifications_total'), 0);
+  assert.equal(metricValue(body, 'alertsink_alert_events_total'), 0);
+  assert.equal(metricValue(body, 'alertsink_last_notification_timestamp_seconds'), 0);
+  assert.equal((await (await fetch(`${base}/timeline`)).json()).length, 0);
 });

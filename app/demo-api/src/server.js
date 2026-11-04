@@ -42,8 +42,9 @@ export function createApp({ logStream = process.stdout, work = syntheticWork } =
   const server = http.createServer(async (req, res) => {
     const startedAt = process.hrtime.bigint();
     const requestId = newRequestId(req.headers['x-request-id']);
-    const { pathname } = new URL(req.url ?? '/', 'http://demo-api');
-    const route = routeTemplate(pathname);
+    // pathname/route объявлены до try: new URL() бросает TypeError на мусорном
+    // request-target, а необработанный reject в async-обработчике роняет процесс.
+    let route = 'invalid';
     let status = 500;
 
     metrics.inflight.inc();
@@ -72,6 +73,22 @@ export function createApp({ logStream = process.stdout, work = syntheticWork } =
     };
 
     try {
+      let pathname;
+      try {
+        pathname = new URL(req.url ?? '/', 'http://demo-api').pathname;
+      } catch (err) {
+        // Мусорный request-target — ошибка клиента, а не сервера. До правки 2026-11-04
+        // это был 500 с падением процесса.
+        log('warn', 'request_bad_target', {
+          request_id: requestId,
+          target: String(req.url ?? '').slice(0, 128),
+          error: err?.message ?? String(err),
+        });
+        respond(400, 'bad request\n');
+        return;
+      }
+      route = routeTemplate(pathname);
+
       if (req.method !== 'GET') {
         respond(405, 'method not allowed\n', { allow: 'GET' });
       } else if (pathname === '/healthz') {

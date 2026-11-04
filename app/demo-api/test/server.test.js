@@ -2,6 +2,7 @@
 // (коды, метрики, форму логов) без кластера и без реального SIGTERM.
 import assert from 'node:assert/strict';
 import { once } from 'node:events';
+import net from 'node:net';
 import { test } from 'node:test';
 
 import { createApp, routeTemplate } from '../src/server.js';
@@ -45,6 +46,24 @@ async function withApp(fn, options = {}) {
   } finally {
     await new Promise((resolve) => app.server.close(resolve));
   }
+}
+
+
+// Сырой HTTP-запрос: fetch не даёт отправить непарсящийся request-target,
+// а именно он ронял процесс (new URL() вне try, правка 2026-11-04).
+function rawRequest(port, payload) {
+  return new Promise((resolve, reject) => {
+    const socket = net.connect(port, '127.0.0.1', () => socket.write(payload));
+    let data = '';
+    socket.setEncoding('utf8');
+    socket.on('data', (chunk) => {
+      data += chunk;
+    });
+    socket.on('error', reject);
+    socket.on('close', () => resolve(data));
+    // Ответ приходит с keep-alive, сам сокет не закроется — закрываем после ответа.
+    setTimeout(() => socket.destroy(), 300);
+  });
 }
 
 test('GET /healthz отвечает 200 без зависимостей', async () => {
@@ -165,4 +184,24 @@ test('http_inflight_requests возвращается к базе после з�
 test('неизвестный путь маршрутизируется в шаблон other', () => {
   assert.equal(routeTemplate('/work'), '/work');
   assert.equal(routeTemplate('/work/123'), 'other');
+});
+
+test('мусорный request-target: 400 и процесс жив', async () => {
+  await withApp(async ({ base, app, lines }) => {
+    const response = await rawRequest(
+      app.server.address().port,
+      'GET http://[::1 HTTP/1.1\r\nHost: test\r\n\r\n',
+    );
+    assert.match(response, /^HTTP\/1\.1 400/);
+    // Сервер обязан продолжать обслуживать запросы: до правки здесь был
+    // unhandled rejection и завершение процесса.
+    assert.equal((await fetch(`${base}/healthz`)).status, 200);
+    const entry = lines
+      .map((chunk) => chunk.trim())
+      .filter(Boolean)
+      .map((chunk) => JSON.parse(chunk))
+      .find((line) => line.msg === 'request_bad_target');
+    assert.ok(entry, 'в логе нет request_bad_target');
+    assert.match(entry.target, /\[::1/);
+  });
 });

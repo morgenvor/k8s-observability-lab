@@ -16,6 +16,11 @@ export const MAX_BODY_BYTES = 1024 * 1024;
 // Кольцо уведомлений. 200 последних хватает на таймлайн дрилла (4 алерта × несколько
 // минут), а память остаётся ограниченной (уведомление — единицы килобайт).
 export const TIMELINE_SIZE = 200;
+// Границы payload: alertname становится меткой Prometheus (alertsink_alert_events_total),
+// а число алертов — числом серий и записей кольца. Без лимитов любой под в кластере
+// POST'ом создаёт произвольную кардинальность (нашло ревью 2026-11-04).
+export const MAX_ALERTS = 200;
+export const MAX_ALERTNAME_LENGTH = 128;
 
 const ALERT_STATUSES = new Set(['firing', 'resolved']);
 // Метка severity в метрике — старшая серьёзность уведомления. critical/warning здесь
@@ -76,6 +81,9 @@ export function validatePayload(payload) {
   if (!Array.isArray(payload.alerts) || payload.alerts.length === 0) {
     return 'alerts должен быть непустым массивом';
   }
+  if (payload.alerts.length > MAX_ALERTS) {
+    return `alerts содержит больше ${MAX_ALERTS} элементов`;
+  }
   for (const [index, alert] of payload.alerts.entries()) {
     if (alert === null || typeof alert !== 'object' || Array.isArray(alert)) {
       return `alerts[${index}] должен быть объектом`;
@@ -88,6 +96,9 @@ export function validatePayload(payload) {
     }
     if (typeof alert.labels.alertname !== 'string' || alert.labels.alertname === '') {
       return `alerts[${index}].labels.alertname обязателен`;
+    }
+    if (alert.labels.alertname.length > MAX_ALERTNAME_LENGTH) {
+      return `alerts[${index}].labels.alertname длиннее ${MAX_ALERTNAME_LENGTH} символов`;
     }
   }
   return null;
@@ -181,7 +192,11 @@ export function createApp({ logStream = process.stdout, clock = () => new Date()
 
   const server = http.createServer(async (req, res) => {
     const startedAt = process.hrtime.bigint();
-    const { pathname } = new URL(req.url ?? '/', 'http://alert-sink');
+    // pathname объявлен до try: new URL() бросает TypeError на мусорном request-target,
+    // а необработанный reject в async-обработчике роняет процесс вместе с кольцом
+    // /timeline (проверено 2026-11-04).
+    let pathname = '/';
+    let route = 'invalid';
     let status = 500;
 
     const respond = (code, body, headers = {}) => {
@@ -193,6 +208,19 @@ export function createApp({ logStream = process.stdout, clock = () => new Date()
       respond(code, `${JSON.stringify(value)}\n`, { 'content-type': 'application/json; charset=utf-8' });
 
     try {
+      try {
+        pathname = new URL(req.url ?? '/', 'http://alert-sink').pathname;
+      } catch (err) {
+        // Мусорный request-target — ошибка клиента, а не сервера.
+        log('warn', 'request_bad_target', {
+          target: String(req.url ?? '').slice(0, 128),
+          error: err?.message ?? String(err),
+        });
+        respond(400, 'bad request\n');
+        return;
+      }
+      route = pathname;
+
       if (pathname === '/webhook') {
         if (req.method !== 'POST') {
           respond(405, 'method not allowed\n', { allow: 'POST' });
@@ -239,13 +267,13 @@ export function createApp({ logStream = process.stdout, clock = () => new Date()
         respond(404, 'not found\n');
       }
     } catch (err) {
-      log('error', 'request_failed', { error: err?.message ?? String(err), route: pathname });
+      log('error', 'request_failed', { error: err?.message ?? String(err), route });
       if (!res.headersSent) respond(500, 'internal error\n');
     } finally {
       const durationSeconds = Number(process.hrtime.bigint() - startedAt) / 1e9;
       log('info', 'http_request', {
         method: req.method,
-        route: pathname,
+        route,
         status,
         duration_ms: Math.round(durationSeconds * 1000),
       });
