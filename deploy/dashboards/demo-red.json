@@ -303,6 +303,44 @@
           "legendFormat": "доля ≤ 300 мс"
         }
       ]
+    },
+    {
+      "id": 5,
+      "title": "Логи demo (Loki)",
+      "description": "stdout подов namespace demo из Loki: demo-api, demo-load, alert-sink, toxiproxy. Строки — JSON, `| json` разбирает поля (status, duration_ms, request_id, outcome); они видны по клику на строку, фильтры удобнее строить в Explore. Пусто при живом трафике — смотреть доставку: kubectl -n monitoring logs ds/alloy -c alloy. Метки потока: namespace, app, pod, container (низкая кардинальность), retention 72h.",
+      "type": "logs",
+      "gridPos": {
+        "h": 10,
+        "w": 24,
+        "x": 0,
+        "y": 16
+      },
+      "datasource": {
+        "type": "loki",
+        "uid": "loki"
+      },
+      "options": {
+        "showTime": true,
+        "showLabels": false,
+        "showCommonLabels": false,
+        "wrapLogMessage": true,
+        "prettifyLogMessage": false,
+        "enableLogDetails": true,
+        "dedupStrategy": "none",
+        "sortOrder": "Descending"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "expr": "{namespace=\"demo\"} | json",
+          "queryType": "range",
+          "maxLines": 100
+        }
+      ]
     }
   ]
 }
