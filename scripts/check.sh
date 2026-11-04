@@ -58,9 +58,13 @@ done
 shopt -u nullglob
 
 # --- 3. Сторонние чарты: helmfile template + kubeconform ---------------------
-step "helmfile template -> kubeconform"
-helmfile -f helmfile.yaml template -l name=monitoring > .tmp/rendered/kps.yaml
-kubeconform -strict -ignore-missing-schemas -summary -output text .tmp/rendered/kps.yaml
+# Рендерим ВСЕ релизы helmfile.yaml одним файлом: релиз без своей строки в воротах
+# (loki/alloy появились в фазе 5) проходил бы проверку «на слово». Список релизов
+# берётся из самого helmfile, второй копии нет.
+step "helmfile template (все релизы) -> kubeconform"
+helmfile -f helmfile.yaml template > .tmp/rendered/helmfile.yaml
+[ -s .tmp/rendered/helmfile.yaml ] || die "рендер helmfile пуст — проверь releases в helmfile.yaml"
+kubeconform -strict -ignore-missing-schemas -summary -output text .tmp/rendered/helmfile.yaml
 
 # --- 4. Свои манифесты: kustomize + kubeconform ------------------------------
 step "kubectl kustomize . -> kubeconform"

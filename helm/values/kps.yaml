@@ -45,6 +45,20 @@ grafana:
     limits:
       cpu: 500m
       memory: 768Mi
+  # 2026-11-04 (фаза 5): datasource Loki. Ключ принадлежит чарту kube-prometheus-stack,
+  # а не subchart grafana: templates/grafana/configmaps-datasources.yaml вставляет
+  # элементы списка как есть в datasources: ConfigMap
+  # `monitoring-kube-prometheus-grafana-datasource`, который читает sidecar Grafana.
+  # Отдельного `datasources:` subchart'а не используем, чтобы не заводить второй
+  # способ описания datasource в одном релизе. uid фиксирован — на него ссылаются
+  # будущие панели логов; url прямой на Service SingleBinary (gateway в Loki выключен).
+  additionalDataSources:
+    - name: Loki
+      type: loki
+      uid: loki
+      url: http://loki.monitoring.svc:3100
+      access: proxy
+      isDefault: false
 
 alertmanager:
   enabled: true

@@ -1,0 +1,84 @@
+# Values Grafana Alloy для лабы: DaemonSet, логи подов через Kubernetes API.
+# Чарт: grafana/alloy 1.15.0 (app v1.21.3) — пин в helmfile.yaml.
+#
+# Почему loki.source.kubernetes, а не loki.source.file по hostPath /var/log/pods:
+# hostPath требует root/privileged и привязывает конфиг к раскладке containerd ноды.
+# API-путь работает от обычного ServiceAccount с RBAC (`pods`, `pods/log`), который
+# чарт создаёт сам (см. rbac.rules ниже — дефолт чарта, править не нужно).
+alloy:
+  configMap:
+    content: |
+      // Источник — все поды кластера, дальше фильтруем по namespace.
+      discovery.kubernetes "pods" {
+        role = "pod"
+      }
+
+      // Метки низкой кардинальности. Всё, что не перечислено (pod_template_hash,
+      // controller_revision_hash, __meta_kubernetes_pod_uid), в метки потоков не попадает
+      // вовсе: они остаются только в целях discovery и нужны одному loki.source.kubernetes,
+      // чтобы понять, чьи логи читать. Такой «выброс» дешевле, чем отдельные labeldrop.
+      discovery.relabel "pod_logs" {
+        targets = discovery.kubernetes.pods.targets
+
+        // Логи нужны для дриллов и для самой наблюдаемости: kube-system в 5 GiB
+        // с retention 72h не поместится и не нужен.
+        rule {
+          source_labels = ["__meta_kubernetes_namespace"]
+          regex         = "demo|monitoring"
+          action        = "keep"
+        }
+        rule {
+          source_labels = ["__meta_kubernetes_namespace"]
+          target_label  = "namespace"
+        }
+        rule {
+          source_labels = ["__meta_kubernetes_pod_name"]
+          target_label  = "pod"
+        }
+        rule {
+          source_labels = ["__meta_kubernetes_pod_container_name"]
+          target_label  = "container"
+        }
+        // Оба имени: app.kubernetes.io/name — стандарт k8s, app — метка, которую
+        // используют манифесты демо-контура и запросы в этом плане.
+        rule {
+          source_labels = ["__meta_kubernetes_pod_label_app_kubernetes_io_name"]
+          target_label  = "app_kubernetes_io_name"
+        }
+        rule {
+          source_labels = ["__meta_kubernetes_pod_label_app"]
+          target_label  = "app"
+        }
+        // Кластер в метке, а не в external_labels: строка метки видна в Grafana и не
+        // зависит от настроек loki.write.
+        rule {
+          target_label = "cluster"
+          replacement  = "lab-k3s"
+        }
+      }
+
+      loki.source.kubernetes "pod_logs" {
+        targets    = discovery.relabel.pod_logs.output
+        forward_to = [loki.write.local.receiver]
+      }
+
+      loki.write "local" {
+        endpoint {
+          // SingleBinary: gateway в Loki выключен, пишем прямо в его Service.
+          url = "http://loki.monitoring.svc:3100/loki/api/v1/push"
+        }
+      }
+  # Даже BestEffort-Alloy на ноде с ~300 Mi запаса может быть вытеснен первым;
+  # запросы маленькие, лимит держит OOM под контролем (план: 500–700 Mi на Loki+Alloy).
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 200m
+      memory: 192Mi
+
+# DaemonSet — дефолт чарта, фиксируем явно: одна реплика на ноду читает свои поды,
+# при вытеснении ноды логи остальных продолжает собирать второй Alloy.
+controller:
+  type: daemonset

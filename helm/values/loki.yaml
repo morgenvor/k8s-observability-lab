@@ -1,0 +1,100 @@
+# Values Grafana Loki для лабы: одна реплика SingleBinary, файловая система, retention 72h.
+# Чарт: grafana/loki 7.5.0 (app 3.6.16) — пин в helmfile.yaml. Источник дефолтов:
+# values.yaml чарта 7.5.0.
+#
+# Почему SingleBinary: в лабе 2 ноды по ~2,9–3,8 GiB и один тенант без HA. SimpleScalable
+# (read/write/backend) требует объектного хранилища, а MinIO в лабе не поднимаем —
+# логи не источник истины, диск под них один. SingleBinary с filesystem даёт весь набор
+# компонентов (distributor, ingester, querier, compactor) в одном процессе.
+# Чарт сам запрещает >1 реплики SingleBinary без объектного хранилища (validate.yaml).
+deploymentMode: SingleBinary
+
+loki:
+  # Один тенант: X-Scope-OrgID и заголовки не нужны ни Alloy, ни Grafana.
+  auth_enabled: false
+  commonConfig:
+    # Одна реплика = один писатель; иначе Loki ждёт кворум и не стартует.
+    replication_factor: 1
+  storage:
+    type: filesystem
+  # Схема индекса задаётся нами: чарт 7.5.0 падает с "You must provide a schema_config",
+  # дефолта (осознанно) нет — схема зависит от хранилища. tsdb + v13 — текущая
+  # рекомендуемая для 3.x, filesystem совпадает с loki.storage.type выше.
+  # Проверено: без этого блока helmfile template падает (см. CHANGELOG фазы 5).
+  schemaConfig:
+    configs:
+      - from: "2024-04-01"
+        store: tsdb
+        object_store: filesystem
+        schema: v13
+        index:
+          prefix: index_
+          period: 24h
+  limits_config:
+    # Совпадает с окном SLO и Prometheus retention: логи нужны на те же 3 суток дриллов.
+    retention_period: 72h
+  # Retention в Loki удаляет только compactor: без этого блока limits_config
+  # retention_period игнорируется, а PVC 5Gi забивается до ReadOnly.
+  compactor:
+    retention_enabled: true
+    # Loki 3.x требует явный store для delete-запросов при включённом retention;
+    # filesystem — тот же бэкенд, что и у чанков (объектного хранилища в лабе нет).
+    delete_request_store: filesystem
+    working_directory: /var/loki/compactor
+
+# Один под: 2 GB на чанки+индекс с запасом под 72 ч логов демо-контура.
+singleBinary:
+  replicas: 1
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+  persistence:
+    size: 5Gi
+
+# Таргеты SimpleScalable (read/write/backend) в values чарта по умолчанию = 3 реплики,
+# и чарт падает на «replicas configured for both single binary and simple scalable»,
+# пока они не обнулены. Это не «выключение компонентов», а выбор режима SingleBinary.
+read:
+  replicas: 0
+write:
+  replicas: 0
+backend:
+  replicas: 0
+
+# Кеши выключаем: каждый чарт-кеш — отдельный memcached StatefulSet, а у нас
+# ~1 лог/с и лимит памяти ноды. Без кешей Loki работает, просто медленнее на чтении.
+chunksCache:
+  enabled: false
+resultsCache:
+  enabled: false
+
+# Gateway (nginx) не нужен: auth выключен, запросы идут напрямую на Service `loki:3100`.
+gateway:
+  enabled: false
+
+# Canary пишет тестовые строки в тот же Loki (лишние streams и память), а helm-тест
+# требует canary — поэтому выключаем обоих. Проверка работоспособности — живыми
+# запросами из Grafana (план, шаг «живое»).
+lokiCanary:
+  enabled: false
+test:
+  enabled: false
+
+# Ruler-правил в Loki у проекта нет (вне объёма v1.0), поэтому sidecar, который ищет
+# ConfigMap/Secret с меткой loki_rule, не нужен: лишний контейнер в поде и RBAC на
+# чтение этих объектов во всех namespace.
+sidecar:
+  rules:
+    enabled: false
+
+# Self-monitoring и MinIO в чарте по умолчанию и так выключены; фиксируем явно,
+# чтобы смена дефолтов чарта не притащила в лабу лишние поды и PVC.
+monitoring:
+  selfMonitoring:
+    enabled: false
+minio:
+  enabled: false

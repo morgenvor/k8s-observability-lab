@@ -4,6 +4,8 @@
 repositories:
   - name: prometheus-community
     url: https://prometheus-community.github.io/helm-charts
+  - name: grafana
+    url: https://grafana.github.io/helm-charts
 
 releases:
   # Стек мониторинга лабы: уже развёрнут (rev5), values принадлежат проекту.
@@ -15,4 +17,23 @@ releases:
     version: 92.14.1
     values:
       - helm/values/kps.yaml
-    # Loki и Alloy добавляются в фазе 5 плана v1.0 (SingleBinary + DaemonSet).
+
+  # Логи (фаза 5): Loki SingleBinary на своём PVC 5Gi и Alloy DaemonSet, который читает
+  # логи подов через Kubernetes API. Версии — последние на 2026-11-04 из `helm search
+  # repo grafana/... --versions`: 7.5.0 (Loki 3.6.16) и 1.15.0 (Alloy v1.21.3).
+  # Namespace общий с monitoring: Alloy нужен доступ к API (RBAC из чарта), а Loki
+  # адресуется как loki.monitoring.svc:3100 — и из Grafana, и из loki.write.
+  - name: loki
+    namespace: monitoring
+    createNamespace: false
+    chart: grafana/loki
+    version: 7.5.0
+    values:
+      - helm/values/loki.yaml
+  - name: alloy
+    namespace: monitoring
+    createNamespace: false
+    chart: grafana/alloy
+    version: 1.15.0
+    values:
+      - helm/values/alloy.yaml
