@@ -1,0 +1,24 @@
+==> дрилл readiness: старт 2026-11-05T14:49:59Z
+  [2026-11-05T14:49:59Z] start: дрилл readiness начат
+==> preflight: кластер, поды, цели Prometheus, toxiproxy, alert-sink
+  [2026-11-05T14:49:59Z] preflight: кластер v1.37.1+k3s1, поды Ready, цели up (demo-api 2, demo-load 1, alert-sink 1), toxiproxy и /timeline отвечают
+  [2026-11-05T14:49:59Z] baseline: фиксирую пробу, число реплик и ready-адреса
+  PASS  readiness_probe_path_baseline: /ready
+  PASS  endpoints_ready_baseline: 2
+  [2026-11-05T14:49:59Z] inject: readinessProbe.demo-api.httpGet.path = /nope
+  [2026-11-05T14:50:00Z] adopt: пересоздаю поды, чтобы шаблон с плохой пробой реально применился
+  [2026-11-05T14:50:05Z] wait_not_ready: жду под demo-api в состоянии Ready=False
+  PASS  pods_not_ready_during_drill: 2
+  [2026-11-05T14:50:05Z] wait_endpoints: жду ноль ready-адресов у Service demo-api
+  PASS  endpoints_ready_during_drill: 0
+  [2026-11-05T14:50:05Z] wait_client_errors: жду, пока клиентская доступность упадёт
+  PASS  availability_ratio_5m_early: 0.4357145834973898
+==> ожидаю SloDemoAvailabilityBurnFast (firing) в alert-sink, не дольше 900 с
+  ALERT SloDemoAvailabilityBurnFast: firing (received_at 2026-11-05T14:54:02.145Z)
+  [2026-11-05T14:54:01Z] alert: SloDemoAvailabilityBurnFast пришёл в alert-sink
+  FAIL  availability_ratio_5m_during_drill: ожидалось <= 0.01, получено 0.4357145834973898
+==> cleanup: снимаю инъекции
+  - вернуть readinessProbe /ready и 2 реплики
+  [2026-11-05T14:54:01Z] cleanup: инъекции сняты, порт-форварды закрыты
+==> evidence: evidence/2026-11-05-readiness.json
+WARN: дрилл readiness: FAIL — см. /app/agent-workspace/k8s-observability-lab/evidence/2026-11-05-readiness.json

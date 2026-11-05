@@ -1,0 +1,112 @@
+{
+  "schema": "drill-evidence/v1",
+  "drill": "oomkill",
+  "cluster_version": "v1.37.1+k3s1",
+  "started_at": "2026-11-05T15:57:57Z",
+  "finished_at": "2026-11-05T15:59:43Z",
+  "assertions": [
+    {
+      "name": "oom_state_reset",
+      "expected": "0",
+      "actual": "0",
+      "passed": true
+    },
+    {
+      "name": "last_terminated_reason",
+      "expected": "OOMKilled",
+      "actual": "OOMKilled",
+      "passed": true
+    },
+    {
+      "name": "reaction_seconds",
+      "expected": "<= 300",
+      "actual": "102",
+      "passed": true
+    },
+    {
+      "name": "restart_count_delta",
+      "expected": ">= 1",
+      "actual": "1",
+      "passed": true
+    },
+    {
+      "name": "deployment_spec_unchanged",
+      "expected": "sha256 91f9e0072b6a10be9a3c4d313ffb768ffd688ca081e628c06c3b164eb62f8dc5",
+      "actual": "sha256 91f9e0072b6a10be9a3c4d313ffb768ffd688ca081e628c06c3b164eb62f8dc5",
+      "passed": true
+    }
+  ],
+  "timeline": [
+    {
+      "t": "2026-11-05T15:57:57Z",
+      "step": "start",
+      "detail": "дрилл oomkill начат"
+    },
+    {
+      "t": "2026-11-05T15:58:00Z",
+      "step": "preflight",
+      "detail": "кластер v1.37.1+k3s1, поды Ready, цели up (demo-api 2, demo-load 1, alert-sink 1), toxiproxy и /timeline отвечают"
+    },
+    {
+      "t": "2026-11-05T15:58:00Z",
+      "step": "reset",
+      "detail": "проверяю, нет ли прошлого OOMKilled (иначе алерт уже firing и не переотправится)"
+    },
+    {
+      "t": "2026-11-05T15:58:00Z",
+      "step": "baseline",
+      "detail": "фиксирую спеку деплоймента и счётчик рестартов"
+    },
+    {
+      "t": "2026-11-05T15:58:00Z",
+      "step": "target",
+      "detail": "под demo-api-66c85c9c5b-6zt5z, рестартов до дрилла: 0"
+    },
+    {
+      "t": "2026-11-05T15:58:00Z",
+      "step": "inject",
+      "detail": "kubectl exec demo-api-66c85c9c5b-6zt5z: пишу 200 MiB при лимите 128Mi"
+    },
+    {
+      "t": "2026-11-05T15:58:01Z",
+      "step": "wait_oom",
+      "detail": "жду lastState.terminated.reason=OOMKilled у подов demo-api"
+    },
+    {
+      "t": "2026-11-05T15:59:42Z",
+      "step": "alert",
+      "detail": "KubePodOOMKilled пришёл в alert-sink"
+    },
+    {
+      "t": "2026-11-05T15:59:42Z",
+      "step": "wait_ready",
+      "detail": "жду, пока под снова станет Ready"
+    },
+    {
+      "t": "2026-11-05T15:59:43Z",
+      "step": "verify_spec",
+      "detail": "сверяю .spec деплоймента с состоянием до дрилла"
+    },
+    {
+      "t": "2026-11-05T15:59:43Z",
+      "step": "done",
+      "detail": "под перезапущен, спеку не трогали"
+    },
+    {
+      "t": "2026-11-05T15:59:43Z",
+      "step": "cleanup",
+      "detail": "инъекции сняты, порт-форварды закрыты"
+    }
+  ],
+  "alerts": [
+    {
+      "name": "KubePodOOMKilled",
+      "fired_at": "2026-11-05T15:59:42.193Z",
+      "resolved_at": null,
+      "source": "alert-sink"
+    }
+  ],
+  "images": {
+    "demo_api": "ef1152f"
+  }
+}

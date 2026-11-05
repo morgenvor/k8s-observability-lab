@@ -1,0 +1,164 @@
+{
+  "schema": "drill-evidence/v1",
+  "drill": "readiness",
+  "cluster_version": "v1.37.1+k3s1",
+  "started_at": "2026-11-05T17:17:39Z",
+  "finished_at": "2026-11-05T17:42:11Z",
+  "assertions": [
+    {
+      "name": "readiness_probe_path_baseline",
+      "expected": "/ready",
+      "actual": "/ready",
+      "passed": true
+    },
+    {
+      "name": "endpoints_ready_baseline",
+      "expected": "2",
+      "actual": "2",
+      "passed": true
+    },
+    {
+      "name": "pods_not_ready_during_drill",
+      "expected": ">= 2",
+      "actual": "2",
+      "passed": true
+    },
+    {
+      "name": "endpoints_ready_during_drill",
+      "expected": "0",
+      "actual": "0",
+      "passed": true
+    },
+    {
+      "name": "availability_ratio_5m_early",
+      "expected": "<= 0.5",
+      "actual": "0.45642540620384053",
+      "passed": true
+    },
+    {
+      "name": "availability_ratio_5m_during_drill",
+      "expected": "<= 0.01",
+      "actual": "0",
+      "passed": true
+    },
+    {
+      "name": "reaction_seconds",
+      "expected": "<= 1500",
+      "actual": "1160",
+      "passed": true
+    },
+    {
+      "name": "endpoints_ready_after",
+      "expected": ">= 2",
+      "actual": "2",
+      "passed": true
+    },
+    {
+      "name": "recovery_seconds",
+      "expected": "<= 600",
+      "actual": "239",
+      "passed": true
+    },
+    {
+      "name": "availability_ratio_5m_after",
+      "expected": ">= 0.99",
+      "actual": "0.9927797833935019",
+      "passed": true
+    },
+    {
+      "name": "readiness_probe_path_after",
+      "expected": "/ready",
+      "actual": "/ready",
+      "passed": true
+    },
+    {
+      "name": "replicas_after",
+      "expected": "2",
+      "actual": "2",
+      "passed": true
+    }
+  ],
+  "timeline": [
+    {
+      "t": "2026-11-05T17:17:39Z",
+      "step": "start",
+      "detail": "дрилл readiness начат"
+    },
+    {
+      "t": "2026-11-05T17:17:42Z",
+      "step": "preflight",
+      "detail": "кластер v1.37.1+k3s1, поды Ready, цели up (demo-api 2, demo-load 1, alert-sink 1), toxiproxy и /timeline отвечают"
+    },
+    {
+      "t": "2026-11-05T17:17:42Z",
+      "step": "baseline",
+      "detail": "фиксирую пробу, число реплик и ready-адреса"
+    },
+    {
+      "t": "2026-11-05T17:17:42Z",
+      "step": "inject",
+      "detail": "readinessProbe.demo-api.httpGet.path = /nope"
+    },
+    {
+      "t": "2026-11-05T17:17:42Z",
+      "step": "adopt",
+      "detail": "пересоздаю поды, чтобы шаблон с плохой пробой реально применился"
+    },
+    {
+      "t": "2026-11-05T17:17:47Z",
+      "step": "wait_not_ready",
+      "detail": "жду под demo-api в состоянии Ready=False"
+    },
+    {
+      "t": "2026-11-05T17:17:52Z",
+      "step": "wait_endpoints",
+      "detail": "жду ноль ready-адресов у Service demo-api"
+    },
+    {
+      "t": "2026-11-05T17:17:52Z",
+      "step": "wait_client_errors",
+      "detail": "жду, пока клиентская доступность упадёт"
+    },
+    {
+      "t": "2026-11-05T17:37:03Z",
+      "step": "alert",
+      "detail": "SloDemoAvailabilityBurnFast пришёл в alert-sink"
+    },
+    {
+      "t": "2026-11-05T17:37:03Z",
+      "step": "restore",
+      "detail": "возвращаю readinessProbe /ready"
+    },
+    {
+      "t": "2026-11-05T17:41:00Z",
+      "step": "resolved",
+      "detail": "SloDemoAvailabilityBurnFast закрылся в alert-sink"
+    },
+    {
+      "t": "2026-11-05T17:42:11Z",
+      "step": "verify_spec",
+      "detail": "сверяю спеку деплоймента с состоянием до дрилла"
+    },
+    {
+      "t": "2026-11-05T17:42:11Z",
+      "step": "done",
+      "detail": "endpoints и трафик восстановлены, спека как до дрилла"
+    },
+    {
+      "t": "2026-11-05T17:42:11Z",
+      "step": "cleanup",
+      "detail": "инъекции сняты, порт-форварды закрыты"
+    }
+  ],
+  "alerts": [
+    {
+      "name": "SloDemoAvailabilityBurnFast",
+      "fired_at": "2026-11-05T17:37:02.243Z",
+      "resolved_at": "2026-11-05T17:41:02.162Z",
+      "source": "alert-sink"
+    }
+  ],
+  "images": {
+    "demo_api": "ef1152f"
+  }
+}

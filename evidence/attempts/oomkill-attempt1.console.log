@@ -1,0 +1,15 @@
+==> дрилл oomkill: старт 2026-11-05T14:46:56Z
+  [2026-11-05T14:46:56Z] start: дрилл oomkill начат
+==> preflight: кластер, поды, цели Prometheus, toxiproxy, alert-sink
+  [2026-11-05T14:46:56Z] preflight: кластер v1.37.1+k3s1, поды Ready, цели up (demo-api 2, demo-load 1, alert-sink 1), toxiproxy и /timeline отвечают
+  [2026-11-05T14:46:56Z] baseline: фиксирую спеку деплоймента и счётчик рестартов
+  [2026-11-05T14:46:56Z] target: под demo-api-66c85c9c5b-4sh9q, рестартов до дрилла: 0
+  [2026-11-05T14:46:56Z] inject: kubectl exec demo-api-66c85c9c5b-4sh9q: выделяю 200 MiB при лимите 128Mi
+  [2026-11-05T14:46:57Z] wait_oom: жду lastState.terminated.reason=OOMKilled у подов demo-api
+jq: error: syntax error, unexpected INVALID_CHARACTER, expecting end of file (Unix shell quoting issues?) at <top-level>, line 3:
+              | .lastState.terminated.reason] | first // "нет")                                                                 
+jq: 1 compile error
+  FAIL  last_terminated_reason: ожидалось OOMKilled, получено 
+  [2026-11-05T14:49:59Z] cleanup: инъекции сняты, порт-форварды закрыты
+==> evidence: evidence/2026-11-05-oomkill.json
+WARN: дрилл oomkill: FAIL — см. /app/agent-workspace/k8s-observability-lab/evidence/2026-11-05-oomkill.json

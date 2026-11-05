@@ -1,0 +1,25 @@
+==> дрилл errors: старт 2026-11-05T13:59:55Z
+  [2026-11-05T13:59:55Z] start: дрилл errors начат
+==> preflight: кластер, поды, цели Prometheus, toxiproxy, alert-sink
+  [2026-11-05T13:59:59Z] preflight: кластер v1.37.1+k3s1, поды Ready, цели up (demo-api 2, demo-load 1, alert-sink 1), toxiproxy и /timeline отвечают
+  [2026-11-05T13:59:59Z] baseline: исходная доступность клиента
+  PASS  availability_ratio_5m_baseline: 1
+  [2026-11-05T13:59:59Z] inject: toxiproxy: reset_peer на прокси demo-api (все соединения сбрасываются)
+  PASS  availability_ratio_5m_early: 0.4531762171474263
+==> ожидаю SloDemoAvailabilityBurnFast (firing) в alert-sink, не дольше 900 с
+  ALERT SloDemoAvailabilityBurnFast: firing (received_at 2026-11-05T14:11:32.175Z)
+  [2026-11-05T14:11:33Z] alert: SloDemoAvailabilityBurnFast пришёл в alert-sink
+  PASS  availability_ratio_5m_during_drill: 0
+  PASS  reaction_seconds: 693
+  [2026-11-05T14:11:33Z] remove: снимаю токсин errors_drill
+==> ожидаю resolved для SloDemoAvailabilityBurnFast в alert-sink, не дольше 600 с
+  ALERT SloDemoAvailabilityBurnFast: resolved (received_at 2026-11-05T14:16:02.157Z)
+  [2026-11-05T14:16:05Z] resolved: SloDemoAvailabilityBurnFast закрылся в alert-sink
+  PASS  recovery_seconds: 269
+  PASS  availability_ratio_5m_after: 1
+  [2026-11-05T14:16:45Z] done: трафик восстановился, токсин снят
+==> cleanup: снимаю инъекции
+  - снять токсин errors_drill с прокси demo-api
+  [2026-11-05T14:16:45Z] cleanup: инъекции сняты, порт-форварды закрыты
+==> evidence: evidence/2026-11-05-errors.json
+==> дрилл errors: PASS

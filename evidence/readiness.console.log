@@ -1,0 +1,36 @@
+==> дрилл readiness: старт 2026-11-05T17:17:39Z
+  [2026-11-05T17:17:39Z] start: дрилл readiness начат
+==> preflight: кластер, поды, цели Prometheus, toxiproxy, alert-sink
+  [2026-11-05T17:17:42Z] preflight: кластер v1.37.1+k3s1, поды Ready, цели up (demo-api 2, demo-load 1, alert-sink 1), toxiproxy и /timeline отвечают
+  [2026-11-05T17:17:42Z] baseline: фиксирую пробу, число реплик и ready-адреса
+  PASS  readiness_probe_path_baseline: /ready
+  PASS  endpoints_ready_baseline: 2
+  [2026-11-05T17:17:42Z] inject: readinessProbe.demo-api.httpGet.path = /nope
+  [2026-11-05T17:17:42Z] adopt: пересоздаю поды, чтобы шаблон с плохой пробой реально применился
+  [2026-11-05T17:17:47Z] wait_not_ready: жду под demo-api в состоянии Ready=False
+  PASS  pods_not_ready_during_drill: 2
+  [2026-11-05T17:17:52Z] wait_endpoints: жду ноль ready-адресов у Service demo-api
+  PASS  endpoints_ready_during_drill: 0
+  [2026-11-05T17:17:52Z] wait_client_errors: жду, пока клиентская доступность упадёт
+  PASS  availability_ratio_5m_early: 0.45642540620384053
+  PASS  availability_ratio_5m_during_drill: 0
+==> ожидаю SloDemoAvailabilityBurnFast (firing) в alert-sink, не дольше 1500 с
+  ALERT SloDemoAvailabilityBurnFast: firing (received_at 2026-11-05T17:37:02.243Z)
+  [2026-11-05T17:37:03Z] alert: SloDemoAvailabilityBurnFast пришёл в alert-sink
+  PASS  reaction_seconds: 1160
+  [2026-11-05T17:37:03Z] restore: возвращаю readinessProbe /ready
+  PASS  endpoints_ready_after: 2
+==> ожидаю resolved для SloDemoAvailabilityBurnFast в alert-sink, не дольше 600 с
+  ALERT SloDemoAvailabilityBurnFast: resolved (received_at 2026-11-05T17:41:02.162Z)
+  [2026-11-05T17:41:00Z] resolved: SloDemoAvailabilityBurnFast закрылся в alert-sink
+  PASS  recovery_seconds: 239
+  PASS  availability_ratio_5m_after: 0.9927797833935019
+  [2026-11-05T17:42:11Z] verify_spec: сверяю спеку деплоймента с состоянием до дрилла
+  PASS  readiness_probe_path_after: /ready
+  PASS  replicas_after: 2
+  [2026-11-05T17:42:11Z] done: endpoints и трафик восстановлены, спека как до дрилла
+==> cleanup: снимаю инъекции
+  - вернуть readinessProbe /ready и 2 реплики
+  [2026-11-05T17:42:11Z] cleanup: инъекции сняты, порт-форварды закрыты
+==> evidence: evidence/2026-11-05-readiness.json
+==> дрилл readiness: PASS

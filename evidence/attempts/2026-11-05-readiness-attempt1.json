@@ -1,0 +1,108 @@
+{
+  "schema": "drill-evidence/v1",
+  "drill": "readiness",
+  "cluster_version": "v1.37.1+k3s1",
+  "started_at": "2026-11-05T14:49:59Z",
+  "finished_at": "2026-11-05T14:54:01Z",
+  "assertions": [
+    {
+      "name": "readiness_probe_path_baseline",
+      "expected": "/ready",
+      "actual": "/ready",
+      "passed": true
+    },
+    {
+      "name": "endpoints_ready_baseline",
+      "expected": "2",
+      "actual": "2",
+      "passed": true
+    },
+    {
+      "name": "pods_not_ready_during_drill",
+      "expected": ">= 2",
+      "actual": "2",
+      "passed": true
+    },
+    {
+      "name": "endpoints_ready_during_drill",
+      "expected": "0",
+      "actual": "0",
+      "passed": true
+    },
+    {
+      "name": "availability_ratio_5m_early",
+      "expected": "<= 0.5",
+      "actual": "0.4357145834973898",
+      "passed": true
+    },
+    {
+      "name": "availability_ratio_5m_during_drill",
+      "expected": "<= 0.01",
+      "actual": "0.4357145834973898",
+      "passed": false
+    }
+  ],
+  "timeline": [
+    {
+      "t": "2026-11-05T14:49:59Z",
+      "step": "start",
+      "detail": "дрилл readiness начат"
+    },
+    {
+      "t": "2026-11-05T14:49:59Z",
+      "step": "preflight",
+      "detail": "кластер v1.37.1+k3s1, поды Ready, цели up (demo-api 2, demo-load 1, alert-sink 1), toxiproxy и /timeline отвечают"
+    },
+    {
+      "t": "2026-11-05T14:49:59Z",
+      "step": "baseline",
+      "detail": "фиксирую пробу, число реплик и ready-адреса"
+    },
+    {
+      "t": "2026-11-05T14:49:59Z",
+      "step": "inject",
+      "detail": "readinessProbe.demo-api.httpGet.path = /nope"
+    },
+    {
+      "t": "2026-11-05T14:50:00Z",
+      "step": "adopt",
+      "detail": "пересоздаю поды, чтобы шаблон с плохой пробой реально применился"
+    },
+    {
+      "t": "2026-11-05T14:50:05Z",
+      "step": "wait_not_ready",
+      "detail": "жду под demo-api в состоянии Ready=False"
+    },
+    {
+      "t": "2026-11-05T14:50:05Z",
+      "step": "wait_endpoints",
+      "detail": "жду ноль ready-адресов у Service demo-api"
+    },
+    {
+      "t": "2026-11-05T14:50:05Z",
+      "step": "wait_client_errors",
+      "detail": "жду, пока клиентская доступность упадёт"
+    },
+    {
+      "t": "2026-11-05T14:54:01Z",
+      "step": "alert",
+      "detail": "SloDemoAvailabilityBurnFast пришёл в alert-sink"
+    },
+    {
+      "t": "2026-11-05T14:54:01Z",
+      "step": "cleanup",
+      "detail": "инъекции сняты, порт-форварды закрыты"
+    }
+  ],
+  "alerts": [
+    {
+      "name": "SloDemoAvailabilityBurnFast",
+      "fired_at": "2026-11-05T14:54:02.145Z",
+      "resolved_at": null,
+      "source": "alert-sink"
+    }
+  ],
+  "images": {
+    "demo_api": "ef1152f"
+  }
+}

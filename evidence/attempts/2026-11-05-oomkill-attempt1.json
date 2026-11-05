@@ -1,0 +1,56 @@
+{
+  "schema": "drill-evidence/v1",
+  "drill": "oomkill",
+  "cluster_version": "v1.37.1+k3s1",
+  "started_at": "2026-11-05T14:46:56Z",
+  "finished_at": "2026-11-05T14:49:59Z",
+  "assertions": [
+    {
+      "name": "last_terminated_reason",
+      "expected": "OOMKilled",
+      "actual": "",
+      "passed": false
+    }
+  ],
+  "timeline": [
+    {
+      "t": "2026-11-05T14:46:56Z",
+      "step": "start",
+      "detail": "дрилл oomkill начат"
+    },
+    {
+      "t": "2026-11-05T14:46:56Z",
+      "step": "preflight",
+      "detail": "кластер v1.37.1+k3s1, поды Ready, цели up (demo-api 2, demo-load 1, alert-sink 1), toxiproxy и /timeline отвечают"
+    },
+    {
+      "t": "2026-11-05T14:46:56Z",
+      "step": "baseline",
+      "detail": "фиксирую спеку деплоймента и счётчик рестартов"
+    },
+    {
+      "t": "2026-11-05T14:46:56Z",
+      "step": "target",
+      "detail": "под demo-api-66c85c9c5b-4sh9q, рестартов до дрилла: 0"
+    },
+    {
+      "t": "2026-11-05T14:46:56Z",
+      "step": "inject",
+      "detail": "kubectl exec demo-api-66c85c9c5b-4sh9q: выделяю 200 MiB при лимите 128Mi"
+    },
+    {
+      "t": "2026-11-05T14:46:57Z",
+      "step": "wait_oom",
+      "detail": "жду lastState.terminated.reason=OOMKilled у подов demo-api"
+    },
+    {
+      "t": "2026-11-05T14:49:59Z",
+      "step": "cleanup",
+      "detail": "инъекции сняты, порт-форварды закрыты"
+    }
+  ],
+  "alerts": [],
+  "images": {
+    "demo_api": "ef1152f"
+  }
+}

@@ -1,0 +1,14 @@
+==> дрилл latency: старт 2026-11-05T14:16:51Z
+  [2026-11-05T14:16:51Z] start: дрилл latency начат
+==> preflight: кластер, поды, цели Prometheus, toxiproxy, alert-sink
+  [2026-11-05T14:16:55Z] preflight: кластер v1.37.1+k3s1, поды Ready, цели up (demo-api 2, demo-load 1, alert-sink 1), toxiproxy и /timeline отвечают
+  [2026-11-05T14:16:55Z] baseline: исходная латентность клиента (p95 за 5m)
+  PASS  baseline_p95_seconds: 0.004866923076923077
+  [2026-11-05T14:16:55Z] inject: toxiproxy: latency 400 мс ± 50 мс на прокси demo-api
+==> ожидаю SloDemoLatencyBurnFast (firing) в alert-sink, не дольше 1800 с
+  FAIL  alert_SloDemoLatencyBurnFast: ожидалось firing не позже 1800 с, получено не пришёл
+==> cleanup: снимаю инъекции
+  - снять токсин latency_drill с прокси demo-api
+  [2026-11-05T14:46:56Z] cleanup: инъекции сняты, порт-форварды закрыты
+==> evidence: evidence/2026-11-05-latency.json
+WARN: дрилл latency: FAIL — см. /app/agent-workspace/k8s-observability-lab/evidence/2026-11-05-latency.json

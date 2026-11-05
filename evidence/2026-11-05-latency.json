@@ -1,0 +1,120 @@
+{
+  "schema": "drill-evidence/v1",
+  "drill": "latency",
+  "cluster_version": "v1.37.1+k3s1",
+  "started_at": "2026-11-05T15:22:20Z",
+  "finished_at": "2026-11-05T15:53:30Z",
+  "assertions": [
+    {
+      "name": "baseline_p95_seconds",
+      "expected": "<= 0.3",
+      "actual": "0.010080357142857026",
+      "passed": true
+    },
+    {
+      "name": "reaction_seconds",
+      "expected": "<= 1800",
+      "actual": "1562",
+      "passed": true
+    },
+    {
+      "name": "client_p95_seconds_during_drill",
+      "expected": "> 0.3",
+      "actual": "0.49800215982721385",
+      "passed": true
+    },
+    {
+      "name": "latency_ratio_5m_during_drill",
+      "expected": "< 0.5",
+      "actual": "0",
+      "passed": true
+    },
+    {
+      "name": "availability_ratio_5m_during_drill",
+      "expected": ">= 0.99",
+      "actual": "0.9937823834196892",
+      "passed": true
+    },
+    {
+      "name": "recovery_seconds",
+      "expected": "<= 600",
+      "actual": "148",
+      "passed": true
+    },
+    {
+      "name": "latency_ratio_5m_after",
+      "expected": ">= 0.95",
+      "actual": "0.9763220205209154",
+      "passed": true
+    },
+    {
+      "name": "client_p95_seconds_after",
+      "expected": "<= 0.3",
+      "actual": "0.004998546511627906",
+      "passed": true
+    }
+  ],
+  "timeline": [
+    {
+      "t": "2026-11-05T15:22:20Z",
+      "step": "start",
+      "detail": "дрилл latency начат"
+    },
+    {
+      "t": "2026-11-05T15:22:23Z",
+      "step": "preflight",
+      "detail": "кластер v1.37.1+k3s1, поды Ready, цели up (demo-api 2, demo-load 1, alert-sink 1), toxiproxy и /timeline отвечают"
+    },
+    {
+      "t": "2026-11-05T15:22:23Z",
+      "step": "baseline",
+      "detail": "исходная латентность клиента (p95 за 5m)"
+    },
+    {
+      "t": "2026-11-05T15:22:23Z",
+      "step": "inject",
+      "detail": "toxiproxy: latency 400 мс ± 50 мс на прокси demo-api"
+    },
+    {
+      "t": "2026-11-05T15:48:28Z",
+      "step": "alert",
+      "detail": "SloDemoLatencyBurnFast пришёл в alert-sink"
+    },
+    {
+      "t": "2026-11-05T15:48:28Z",
+      "step": "check",
+      "detail": "сверяю метрики клиента, пока инъекция держится"
+    },
+    {
+      "t": "2026-11-05T15:48:28Z",
+      "step": "remove",
+      "detail": "снимаю токсин latency_drill"
+    },
+    {
+      "t": "2026-11-05T15:50:59Z",
+      "step": "resolved",
+      "detail": "SloDemoLatencyBurnFast закрылся в alert-sink"
+    },
+    {
+      "t": "2026-11-05T15:53:30Z",
+      "step": "done",
+      "detail": "латентность восстановилась, токсин снят"
+    },
+    {
+      "t": "2026-11-05T15:53:30Z",
+      "step": "cleanup",
+      "detail": "инъекции сняты, порт-форварды закрыты"
+    }
+  ],
+  "alerts": [
+    {
+      "name": "SloDemoLatencyBurnFast",
+      "fired_at": "2026-11-05T15:48:25.985Z",
+      "resolved_at": "2026-11-05T15:50:56.066Z",
+      "source": "alert-sink"
+    }
+  ],
+  "images": {
+    "demo_api": "ef1152f"
+  }
+}

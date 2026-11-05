@@ -1,0 +1,52 @@
+{
+  "schema": "drill-evidence/v1",
+  "drill": "latency",
+  "cluster_version": "v1.37.1+k3s1",
+  "started_at": "2026-11-05T14:16:51Z",
+  "finished_at": "2026-11-05T14:46:56Z",
+  "assertions": [
+    {
+      "name": "baseline_p95_seconds",
+      "expected": "<= 0.3",
+      "actual": "0.004866923076923077",
+      "passed": true
+    },
+    {
+      "name": "alert_SloDemoLatencyBurnFast",
+      "expected": "firing не позже 1800 с",
+      "actual": "не пришёл",
+      "passed": false
+    }
+  ],
+  "timeline": [
+    {
+      "t": "2026-11-05T14:16:51Z",
+      "step": "start",
+      "detail": "дрилл latency начат"
+    },
+    {
+      "t": "2026-11-05T14:16:55Z",
+      "step": "preflight",
+      "detail": "кластер v1.37.1+k3s1, поды Ready, цели up (demo-api 2, demo-load 1, alert-sink 1), toxiproxy и /timeline отвечают"
+    },
+    {
+      "t": "2026-11-05T14:16:55Z",
+      "step": "baseline",
+      "detail": "исходная латентность клиента (p95 за 5m)"
+    },
+    {
+      "t": "2026-11-05T14:16:55Z",
+      "step": "inject",
+      "detail": "toxiproxy: latency 400 мс ± 50 мс на прокси demo-api"
+    },
+    {
+      "t": "2026-11-05T14:46:56Z",
+      "step": "cleanup",
+      "detail": "инъекции сняты, порт-форварды закрыты"
+    }
+  ],
+  "alerts": [],
+  "images": {
+    "demo_api": "ef1152f"
+  }
+}
