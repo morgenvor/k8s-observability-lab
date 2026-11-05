@@ -169,9 +169,9 @@ tests:
 
   # Латентность: три дня здоровья, затем 80 минут, когда 90 % запросов медленнее
   # 300 мс. Доля ≤ 300 мс падает до 0,1 при бюджете 5 %, то есть burn 18x: fast
-  # горит (1h переваливает за порог на 48-й минуте деградации). Medium молчит по
-  # существу: в шестичасовом окне деградация занимает 80 из 360 минут, burn 4x
-  # при пороге 6x. Доступность здорова — availability-алерты не срабатывают.
+  # горит. Medium молчит по существу: в шестичасовом окне деградация занимает
+  # 80 из 360 минут, burn 4x при пороге 6x. Доступность здорова —
+  # availability-алерты не срабатывают.
   - name: "3 дня здоровья + 80 минут медленных запросов: горит только latency fast"
     interval: 1m
     input_series:
@@ -207,7 +207,7 @@ tests:
               summary: "demo-api: быстрый расход бюджета латентности (SLO 95 % / 300 мс)"
               description: >-
                 Доля запросов медленнее 300 мс растёт: burn rate 18.0x
-                (порог 14,4x в окнах 5m и 1h) при бюджете 5 %. Проверь
+                (порог 14,4x в окнах 5m и 30m) при бюджете 5 %. Проверь
                 латентность клиента demo-load и toxiproxy: дрилл latency
                 добавляет задержку на прокси, а не в приложении.
               runbook_url: "docs/drills.md"
@@ -219,6 +219,63 @@ tests:
         alertname: SloDemoLatencyBurnSlow
         exp_alerts: []
       - eval_time: 4400m
+        alertname: SloDemoAvailabilityBurnFast
+        exp_alerts: []
+
+  # Латентность: 30 минут ПОЛНОГО замедления (все запросы медленнее 300 мс).
+  # Сценарий закрепляет выбор длинного окна у fast-алерта: с окном 30m burn
+  # равен 20x и page горит на 22-й минуте деградации, а с прежним окном 1h
+  # burn_rate_1h был бы 10x (половина окна ещё здорова) и алерт молчал бы.
+  - name: "3 дня здоровья + 30 минут полного замедления: горит latency fast"
+    interval: 1m
+    input_series:
+      - series: 'load_requests_total{job="demo-load",outcome="ok",namespace="demo"}'
+        values: '0+300x4350'
+      - series: 'load_requests_total{job="demo-load",outcome="error",namespace="demo"}'
+        values: '0+0x4350'
+      - series: 'load_request_duration_seconds_bucket{job="demo-load",le="0.3",namespace="demo"}'
+        values: '0+300x4320 1296000+0x30'
+      - series: 'load_request_duration_seconds_count{job="demo-load",namespace="demo"}'
+        values: '0+300x4350'
+    promql_expr_test:
+      - expr: slo:demo_latency:burn_rate_30m
+        eval_time: 4350m
+        exp_samples:
+          - labels: 'slo:demo_latency:burn_rate_30m{service="demo-api",slo="latency"}'
+            value: 20
+      - expr: slo:demo_latency:burn_rate_1h
+        eval_time: 4350m
+        exp_samples:
+          # Не ровно 10: rate() дотягивает левую границу часового окна, поэтому в
+          # здоровую половину попадает чуть меньше 30 минут. Важен порядок: с окном
+          # 1h burn был бы ~10x при пороге 14,4x, то есть page не сработал бы.
+          - labels: 'slo:demo_latency:burn_rate_1h{service="demo-api",slo="latency"}'
+            value: 10.169491525423728
+    alert_rule_test:
+      - eval_time: 4350m
+        alertname: SloDemoLatencyBurnFast
+        exp_alerts:
+          - exp_labels:
+              severity: page
+              service: demo-api
+              namespace: demo
+              slo: latency
+            exp_annotations:
+              summary: "demo-api: быстрый расход бюджета латентности (SLO 95 % / 300 мс)"
+              description: >-
+                Доля запросов медленнее 300 мс растёт: burn rate 20.0x
+                (порог 14,4x в окнах 5m и 30m) при бюджете 5 %. Проверь
+                латентность клиента demo-load и toxiproxy: дрилл latency
+                добавляет задержку на прокси, а не в приложении.
+              runbook_url: "docs/drills.md"
+              dashboard_url: "/d/demo-slo"
+      - eval_time: 4350m
+        alertname: SloDemoLatencyBurnMedium
+        exp_alerts: []
+      - eval_time: 4350m
+        alertname: SloDemoLatencyBurnSlow
+        exp_alerts: []
+      - eval_time: 4350m
         alertname: SloDemoAvailabilityBurnFast
         exp_alerts: []
 
