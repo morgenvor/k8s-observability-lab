@@ -33,7 +33,11 @@ inject_epoch="$(date -u +%s)"
 drill_toxi_add demo-api "${TOXIC}" latency "{\"latency\":${LATENCY_MS},\"jitter\":${JITTER_MS}}"
 
 wait_alert SloDemoLatencyBurnFast "${EXPECT_REACTION}"
-assert_num "reaction_seconds" le "${EXPECT_REACTION}" "$((WAIT_ALERT_EPOCH - inject_epoch))"
+reaction=$((WAIT_ALERT_EPOCH - inject_epoch))
+# gt 0 ловит ложное совпадение: /timeline помнит прошлый дрилл, а допуск на расхождение
+# часов (±120 с) иначе мог бы засчитать чужое уведомление (нашло ревью 2026-11-06).
+assert_num "reaction_seconds_positive" gt 0 "${reaction}"
+assert_num "reaction_seconds" le "${EXPECT_REACTION}" "${reaction}"
 
 event "check" "сверяю метрики клиента, пока инъекция держится"
 p95_during="$(drill_prom_value 'histogram_quantile(0.95, sum(rate(load_request_duration_seconds_bucket{job="demo-load"}[5m])) by (le))')"
@@ -48,7 +52,9 @@ event "remove" "снимаю токсин ${TOXIC}"
 remove_epoch="$(date -u +%s)"
 drill_toxi_remove demo-api "${TOXIC}"
 wait_resolved SloDemoLatencyBurnFast "${EXPECT_RECOVERY}"
-assert_num "recovery_seconds" le "${EXPECT_RECOVERY}" "$((WAIT_RESOLVED_EPOCH - remove_epoch))"
+recovery=$((WAIT_RESOLVED_EPOCH - remove_epoch))
+assert_num "recovery_seconds_positive" gt 0 "${recovery}"
+assert_num "recovery_seconds" le "${EXPECT_RECOVERY}" "${recovery}"
 
 ratio_after="$(drill_wait_num 'slo:demo_latency:ratio_5m' ge 0.95 300 || true)"
 assert_num "latency_ratio_5m_after" ge 0.95 "${ratio_after}"

@@ -5,8 +5,9 @@
 #
 # Почему после правки пробы поды приходится пересоздавать (масштабирование 0 → 2):
 # стратегия деплоймента по умолчанию — RollingUpdate с maxUnavailable 0 и maxSurge 1.
-# Новый ReplicaSet с плохой пробой создаёт один под, который так и не становится Ready, а старые
-# поды с исправной пробой продолжают обслуживать трафик — endpoints не пустеют, и
+# Новый ReplicaSet с плохой пробой создаёт один под, который так и не становится
+# Ready, а старые поды с исправной пробой продолжают обслуживать трафик — endpoints
+# не пустеют, и
 # «дрилл» ничего бы не деградировал. Поэтому после правки пробы поды снимаются, а
 # новые стартуют уже с /nope: они Running, но NotReady, endpoints пустеют, demo-load
 # видит ошибки. Само maxUnavailable=0 — находка дрилла, а не повод менять спеку.
@@ -18,7 +19,9 @@
 # Время реакции здесь больше, чем у дрилла errors (там page ~11 минут): пустые
 # endpoints не отвергают соединения, а дропают пакеты, поэтому клиент уходит в свой
 # timeout 1 с, общий rps падает с 4,7 до 1,9, и ratio_1h опускается вдвое медленнее.
-# Измерено 2026-11-05: 1099 с (18,3 мин) при чистом часовом окне на старте.
+# Измерено 2026-11-05 (чистое часовое окно на старте, `ratio_1h` 0,992): 1160 с
+# (19,3 мин). Первая попытка дала 1099 с и не прошла порог 900 с — именно она была
+# поводом поднять `EXPECT_REACTION` и объяснить причину.
 #
 # Использование: ./drills/readiness.sh
 # Env: EXPECT_REACTION (1500 с), EXPECT_RECOVERY (600 с).
@@ -76,6 +79,17 @@ restore_spec() { # снимает инъекцию: проба и число р�
     "[{\"op\":\"replace\",\"path\":\"/spec/template/spec/containers/0/readinessProbe/httpGet/path\",\"value\":\"${PROBE_PATH_ORIGINAL}\"}]" \
     >/dev/null 2>&1 || true
   scale_to "${REPLICAS_ORIGINAL}"
+  # Откат обязан быть проверяемым: patch мог не примениться, и тогда стенд остался бы
+  # с /nope после «успешного» cleanup. В успешном пути это дублирует assert_eq ниже,
+  # в аварийном (cleanup после падения) — единственная проверка.
+  local restored
+  restored="$(probe_path 2>/dev/null || true)"
+  if [ "${restored}" != "${PROBE_PATH_ORIGINAL}" ]; then
+    warn "readinessProbe не восстановилась: сейчас '${restored}', ожидалось '${PROBE_PATH_ORIGINAL}'"
+    # shellcheck disable=SC2034  # флаг читает drill_cleanup/evidence в drills/lib.sh
+    DRILL_FAILED=1
+    return 1
+  fi
 }
 
 # --- исходное состояние -----------------------------------------------------
@@ -117,7 +131,11 @@ error_ratio="$(drill_wait_num 'slo:demo_availability:ratio_5m' le 0.01 420 || tr
 assert_num "availability_ratio_5m_during_drill" le 0.01 "${error_ratio}"
 
 wait_alert SloDemoAvailabilityBurnFast "${EXPECT_REACTION}"
-assert_num "reaction_seconds" le "${EXPECT_REACTION}" "$((WAIT_ALERT_EPOCH - inject_epoch))"
+reaction=$((WAIT_ALERT_EPOCH - inject_epoch))
+# gt 0 ловит ложное совпадение: /timeline помнит прошлый дрилл, а допуск на расхождение
+# часов (±120 с) иначе мог бы засчитать чужое уведомление (нашло ревью 2026-11-06).
+assert_num "reaction_seconds_positive" gt 0 "${reaction}"
+assert_num "reaction_seconds" le "${EXPECT_REACTION}" "${reaction}"
 
 # --- восстановление ---------------------------------------------------------
 event "restore" "возвращаю readinessProbe ${PROBE_PATH_ORIGINAL}"
@@ -127,7 +145,9 @@ restore_spec
 wait_until 300 endpoints_ready_at_least 2 || true
 assert_num "endpoints_ready_after" ge 2 "$(endpoint_ready_count)"
 wait_resolved SloDemoAvailabilityBurnFast "${EXPECT_RECOVERY}"
-assert_num "recovery_seconds" le "${EXPECT_RECOVERY}" "$((WAIT_RESOLVED_EPOCH - remove_epoch))"
+recovery=$((WAIT_RESOLVED_EPOCH - remove_epoch))
+assert_num "recovery_seconds_positive" gt 0 "${recovery}"
+assert_num "recovery_seconds" le "${EXPECT_RECOVERY}" "${recovery}"
 
 ratio_after="$(drill_wait_num 'slo:demo_availability:ratio_5m' ge 0.99 300 || true)"
 assert_num "availability_ratio_5m_after" ge 0.99 "${ratio_after}"

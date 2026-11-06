@@ -41,13 +41,19 @@ error_ratio="$(drill_wait_num 'slo:demo_availability:ratio_5m' le 0.01 420 || tr
 assert_num "availability_ratio_5m_during_drill" le 0.01 "${error_ratio}"
 
 wait_alert SloDemoAvailabilityBurnFast "${EXPECT_REACTION}"
-assert_num "reaction_seconds" le "${EXPECT_REACTION}" "$((WAIT_ALERT_EPOCH - inject_epoch))"
+reaction=$((WAIT_ALERT_EPOCH - inject_epoch))
+# gt 0 ловит ложное совпадение: /timeline помнит прошлый дрилл, а допуск на расхождение
+# часов (±120 с) иначе мог бы засчитать чужое уведомление (нашло ревью 2026-11-06).
+assert_num "reaction_seconds_positive" gt 0 "${reaction}"
+assert_num "reaction_seconds" le "${EXPECT_REACTION}" "${reaction}"
 
 event "remove" "снимаю токсин ${TOXIC}"
 remove_epoch="$(date -u +%s)"
 drill_toxi_remove demo-api "${TOXIC}"
 wait_resolved SloDemoAvailabilityBurnFast "${EXPECT_RECOVERY}"
-assert_num "recovery_seconds" le "${EXPECT_RECOVERY}" "$((WAIT_RESOLVED_EPOCH - remove_epoch))"
+recovery=$((WAIT_RESOLVED_EPOCH - remove_epoch))
+assert_num "recovery_seconds_positive" gt 0 "${recovery}"
+assert_num "recovery_seconds" le "${EXPECT_RECOVERY}" "${recovery}"
 
 ratio_after="$(drill_wait_num 'slo:demo_availability:ratio_5m' ge 0.99 300 || true)"
 assert_num "availability_ratio_5m_after" ge 0.99 "${ratio_after}"

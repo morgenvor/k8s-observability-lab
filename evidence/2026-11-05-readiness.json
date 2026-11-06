@@ -160,5 +160,6 @@
   ],
   "images": {
     "demo_api": "ef1152f"
-  }
+  },
+  "result": "passed"
 }

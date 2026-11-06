@@ -91,7 +91,11 @@ terminated_reason="$(kubectl -n "${DEMO_NS}" get pods -l app=demo-api -o json \
 assert_eq "last_terminated_reason" "OOMKilled" "${terminated_reason}"
 
 wait_alert KubePodOOMKilled "${EXPECT_REACTION}"
-assert_num "reaction_seconds" le "${EXPECT_REACTION}" "$((WAIT_ALERT_EPOCH - inject_epoch))"
+reaction=$((WAIT_ALERT_EPOCH - inject_epoch))
+# gt 0 ловит ложное совпадение: /timeline помнит прошлый дрилл, а допуск на расхождение
+# часов (±120 с) иначе мог бы засчитать чужое уведомление (нашло ревью 2026-11-06).
+assert_num "reaction_seconds_positive" gt 0 "${reaction}"
+assert_num "reaction_seconds" le "${EXPECT_REACTION}" "${reaction}"
 
 event "wait_ready" "жду, пока под снова станет Ready"
 kubectl -n "${DEMO_NS}" wait --for=condition=Ready pod -l app=demo-api \

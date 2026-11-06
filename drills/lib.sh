@@ -59,15 +59,47 @@ declare -a CLEANUP_ARGS=()
 # Порт-форвард — обычный процесс kubectl; живёт до конца дрилла и убивается в cleanup.
 # Обрыв возможен (сон машины, сеть до лабы), поэтому любая неудача запроса один раз
 # пере-поднимает форвард, а не валит дрилл на середине 20-минутного ожидания.
+#
+# PID нельзя хранить только в переменных: почти все запросы к Prometheus/alert-sink
+# идут из подстановок `$(...)`, а переменные подпроцесса родителю не видны — cleanup
+# видел пустой массив и оставлял форварды висеть (нашло ревью 2026-11-06). Поэтому PID
+# пишется ещё и в файл состояния дрилла: его видно из любой подстановки.
+_pf_state_file() { printf '%s/%s.forwards' "${DRILL_STATE_DIR}" "${DRILL_NAME}"; }
+
+_pf_record() { # <local_port> <pid> <ns> <svc> <remote_port> <probe_path>
+  local file line
+  file="$(_pf_state_file)"
+  line="$1 $2 $3 $4 $5 $6"
+  # Одна строка на порт: старые записи о нём удаляем, чтобы файл не рос.
+  {
+    grep -v "^$1 " "${file}" 2>/dev/null || true
+    printf '%s\n' "${line}"
+  } >"${file}.tmp"
+  mv "${file}.tmp" "${file}"
+}
+
+_pf_state_line() { # <local_port> -> "local pid ns svc remote probe"
+  grep "^$1 " "$(_pf_state_file)" 2>/dev/null | tail -1
+}
+
 _pf_start() { # <ns> <svc> <local_port> <remote_port> <probe_path>
-  local ns="$1" svc="$2" local_port="$3" remote_port="$4" probe="$5" i
+  local ns="$1" svc="$2" local_port="$3" remote_port="$4" probe="$5" i pid
   # kubectl приходит из .tools/bin, а PATH наполняет require_tools: без явной проверки
   # ошибка выглядела бы как «порт-форвард не поднялся» вместо «нет kubectl».
   need_cmd kubectl
   PF_ARGS["${local_port}"]="${ns} ${svc} ${local_port} ${remote_port} ${probe}"
   kubectl -n "${ns}" port-forward "svc/${svc}" "${local_port}:${remote_port}" >/dev/null 2>&1 &
-  PF_PIDS["${local_port}"]=$!
+  pid=$!
+  PF_PIDS["${local_port}"]="${pid}"
+  _pf_record "${local_port}" "${pid}" "${ns}" "${svc}" "${remote_port}" "${probe}"
   for i in $(seq 1 30); do
+    # Проверка живости своего процесса обязательна: если порт уже занят чужим
+    # листенером, проба пройдёт, а это не наш форвард (и такой «успех» маскировал
+    # утечки — нашло ревью 2026-11-06).
+    if ! kill -0 "${pid}" 2>/dev/null; then
+      warn "kubectl port-forward ${local_port} сразу завершился (порт занят?)"
+      return 1
+    fi
     if curl -sf --max-time 2 "http://127.0.0.1:${local_port}${probe}" >/dev/null 2>&1; then
       return 0
     fi
@@ -76,21 +108,39 @@ _pf_start() { # <ns> <svc> <local_port> <remote_port> <probe_path>
   return 1
 }
 
+_pf_alive() { # <local_port>
+  local pid="${PF_PIDS[${1}]:-}"
+  [ -n "${pid}" ] && kill -0 "${pid}" 2>/dev/null
+}
+
 _pf_restart() { # <local_port>
-  local port="$1"
-  local args="${PF_ARGS[${port}]:-}"
-  [ -n "${args}" ] || die "порт ${port} не обслуживается порт-форвардом дрилла"
-  kill "${PF_PIDS[${port}]}" >/dev/null 2>&1 || true
-  # shellcheck disable=SC2086  # строка собрана в _pf_start: ns svc local remote probe
-  _pf_start ${args} || die "порт-форвард на 127.0.0.1:${port} не поднялся"
+  local port="$1" pid="" ns svc remote probe args
+  if [ -n "${PF_PIDS[${port}]:-}" ]; then
+    kill "${PF_PIDS[${port}]}" >/dev/null 2>&1 || true
+  fi
+  # В подпроцессе аргументов родителя нет — берём их из файла состояния.
+  if [ -z "${PF_ARGS[${port}]:-}" ]; then
+    read -r _ pid ns svc remote probe < <(_pf_state_line "${port}")
+  else
+    read -r ns svc _ remote probe <<<"${PF_ARGS[${port}]}"
+    [ -n "${ns}" ] || die "порт ${port} не обслуживается порт-форвардом дрилла"
+  fi
+  [ -n "${ns:-}" ] || die "порт ${port} не обслуживается порт-форвардом дрилла"
+  _pf_start "${ns}" "${svc}" "${port}" "${remote}" "${probe}" \
+    || die "порт-форвард на 127.0.0.1:${port} не поднялся"
 }
 
 _pf_ensure() { # <local_port> <ns> <svc> <remote_port> <probe_path>
   local port="$1"
-  if [ -z "${PF_ARGS[${port}]:-}" ]; then
-    _pf_start "$2" "$3" "${port}" "$4" "$5" \
-      || die "порт-форвард ${DEMO_NS:+}${2}/${3} на 127.0.0.1:${port} не поднялся"
+  if _pf_alive "${port}"; then return 0; fi
+  # Из подстановки массив PID родителя не виден: там достаточно ответа порта, а
+  # запущенный форвард попадёт в файл состояния и будет убит в cleanup.
+  if [ -z "${PF_ARGS[${port}]:-}" ] \
+    && curl -sf --max-time 2 "http://127.0.0.1:${port}${5}" >/dev/null 2>&1; then
+    return 0
   fi
+  _pf_start "$2" "$3" "${port}" "$4" "$5" \
+    || die "порт-форвард ${2}/${3} на 127.0.0.1:${port} не поднялся"
 }
 
 _fetch() { # <local_port> <path> [curl args...] — stdout тело ответа
@@ -279,7 +329,7 @@ wait_alert() { # <alertname> <timeout_seconds>
       event "alert" "${name} пришёл в alert-sink"
       return 0
     fi
-    sleep 5
+    sleep 10
   done
   _record_assertion "alert_${name}" "firing не позже ${timeout} с" "не пришёл" false
 }
@@ -299,7 +349,7 @@ wait_resolved() { # <alertname> <timeout_seconds>
       event "resolved" "${name} закрылся в alert-sink"
       return 0
     fi
-    sleep 5
+    sleep 10
   done
   _record_assertion "alert_${name}_resolved" "resolved не позже ${timeout} с" "не пришёл" false
 }
@@ -312,11 +362,13 @@ drill_cleanup_add() { # <описание> <функция> [аргументы.
 }
 
 _drill_write_evidence() {
-  local finished tmp
+  local finished tmp result="passed"
   finished="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  [ "${DRILL_FAILED}" -eq 0 ] || result="failed"
   tmp="${DRILL_EVIDENCE}.tmp"
   if ! jq -n \
     --arg schema "drill-evidence/v1" \
+    --arg result "${result}" \
     --arg drill "${DRILL_NAME}" \
     --arg cluster "${DRILL_CLUSTER_VERSION}" \
     --arg started "${DRILL_STARTED_AT}" \
@@ -327,6 +379,7 @@ _drill_write_evidence() {
     --slurpfile alerts "${DRILL_ALERTS}" '
       {
         schema: $schema,
+        result: $result,
         drill: $drill,
         cluster_version: $cluster,
         started_at: $started,
@@ -368,13 +421,24 @@ drill_cleanup() {
       fi
     done
   fi
-  local port
+  # Порт-форварды: то, что помнит родитель, плюс всё из файла состояния (форварды,
+  # поднятые из подстановок). Без второго источника они оставались жить после дрилла.
+  local file port pid
+  file="$(_pf_state_file)"
+  if [ -f "${file}" ]; then
+    while read -r port pid _; do
+      kill "${pid}" >/dev/null 2>&1
+    done <"${file}"
+    rm -f "${file}"
+  fi
   for port in "${!PF_PIDS[@]}"; do
     kill "${PF_PIDS[${port}]}" >/dev/null 2>&1
   done
   event "cleanup" "инъекции сняты, порт-форварды закрыты"
-  _drill_write_evidence || DRILL_FAILED=1
+  # Итог прогона выставляется ДО записи evidence: иначе поле result не увидит провал,
+  # из-за которого дрилл завершается с ненулевым кодом.
   [ "${code}" -eq 0 ] || DRILL_FAILED=1
+  _drill_write_evidence || DRILL_FAILED=1
   if [ "${DRILL_FAILED}" -eq 0 ]; then
     info "дрилл ${DRILL_NAME}: PASS"
     exit 0
@@ -395,6 +459,28 @@ drill_evidence_init() { # <drill>
   DRILL_EVENTS="${DRILL_STATE_DIR}/${name}.events.ndjson"
   DRILL_ASSERTIONS="${DRILL_STATE_DIR}/${name}.assertions.ndjson"
   DRILL_ALERTS="${DRILL_STATE_DIR}/${name}.alerts.ndjson"
+  # PID прошлого прогона не должны попасть в cleanup этого: номера переиспользуются.
+  rm -f "$(_pf_state_file)"
+
+  # Повторный прогон в тот же день не затирает доказательства: прежний файл и
+  # транскрипт уезжают в evidence/attempts/ с суффиксом -attemptN (нашло ревью
+  # 2026-11-06: два провальных прогона были затёрты успешными).
+  if [ -f "${DRILL_EVIDENCE}" ] || [ -f "${DRILL_CONSOLE}" ]; then
+    mkdir -p "${EVIDENCE_DIR}/attempts"
+    local attempt=1 stem
+    stem="$(basename "${DRILL_EVIDENCE%.json}")"
+    while [ -e "${EVIDENCE_DIR}/attempts/${stem}-attempt${attempt}.json" ]; do
+      attempt=$((attempt + 1))
+    done
+    if [ -f "${DRILL_EVIDENCE}" ]; then
+      mv "${DRILL_EVIDENCE}" "${EVIDENCE_DIR}/attempts/${stem}-attempt${attempt}.json"
+    fi
+    if [ -f "${DRILL_CONSOLE}" ]; then
+      mv "${DRILL_CONSOLE}" "${EVIDENCE_DIR}/attempts/${name}-attempt${attempt}.console.log"
+    fi
+    info "прежний прогон ${name} сохранён как attempt${attempt}"
+  fi
+
   : >"${DRILL_CONSOLE}"
   : >"${DRILL_EVENTS}"
   : >"${DRILL_ASSERTIONS}"
