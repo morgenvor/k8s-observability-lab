@@ -243,14 +243,13 @@ tests:
         exp_samples:
           - labels: 'slo:demo_latency:burn_rate_30m{service="demo-api",slo="latency"}'
             value: 20
-      - expr: slo:demo_latency:burn_rate_1h
+      # Утверждение про прежнее окно 1h — «серии выше порога нет», а не точное
+      # значение: `rate()` дотягивает левую границу часового окна, и точное число
+      # (≈10,17) ломалось бы от смены шага/числа точек. Смысл — с окном 1h page
+      # молчал бы, то есть burn остаётся ниже 14,4x.
+      - expr: slo:demo_latency:burn_rate_1h > 14.4
         eval_time: 4350m
-        exp_samples:
-          # Не ровно 10: rate() дотягивает левую границу часового окна, поэтому в
-          # здоровую половину попадает чуть меньше 30 минут. Важен порядок: с окном
-          # 1h burn был бы ~10x при пороге 14,4x, то есть page не сработал бы.
-          - labels: 'slo:demo_latency:burn_rate_1h{service="demo-api",slo="latency"}'
-            value: 10.169491525423728
+        exp_samples: []
     alert_rule_test:
       - eval_time: 4350m
         alertname: SloDemoLatencyBurnFast
@@ -277,6 +276,38 @@ tests:
         exp_alerts: []
       - eval_time: 4350m
         alertname: SloDemoAvailabilityBurnFast
+        exp_alerts: []
+
+  # Обратная сторона выбора окна 30m: короткий всплеск замедления page НЕ поднимает.
+  # Шесть минут полного замедления дают burn_rate_5m = 20 (> 14,4), но burn_rate_30m
+  # всего ~4 — длинное окно гасит всплеск, и запас по времени есть. Сценарий ловит
+  # откат `burn_rate_30m` → `burn_rate_5m` в выражении fast-алерта.
+  - name: "3 дня здоровья + 6 минут полного замедления: latency fast молчит"
+    interval: 1m
+    input_series:
+      - series: 'load_requests_total{job="demo-load",outcome="ok",namespace="demo"}'
+        values: '0+300x4326'
+      - series: 'load_requests_total{job="demo-load",outcome="error",namespace="demo"}'
+        values: '0+0x4326'
+      - series: 'load_request_duration_seconds_bucket{job="demo-load",le="0.3",namespace="demo"}'
+        values: '0+300x4320 1296000+0x6'
+      - series: 'load_request_duration_seconds_count{job="demo-load",namespace="demo"}'
+        values: '0+300x4326'
+    promql_expr_test:
+      - expr: slo:demo_latency:burn_rate_5m
+        eval_time: 4326m
+        exp_samples:
+          - labels: 'slo:demo_latency:burn_rate_5m{service="demo-api",slo="latency"}'
+            value: 20
+      - expr: slo:demo_latency:burn_rate_30m > 14.4
+        eval_time: 4326m
+        exp_samples: []
+    alert_rule_test:
+      - eval_time: 4326m
+        alertname: SloDemoLatencyBurnFast
+        exp_alerts: []
+      - eval_time: 4326m
+        alertname: SloDemoLatencyBurnMedium
         exp_alerts: []
 
   # Серии outcome="ok" не было никогда (под стартовал сразу в отказе). Без
