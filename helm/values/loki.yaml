@@ -62,6 +62,16 @@ singleBinary:
     # контракта отката фазы 5, а не случайная деталь values.
     enabled: true
     size: 5Gi
+    # 2026-11-07: когда StatefulSet масштабируют в 0, том НЕ удаляется.
+    # Дефолт чарта — whenScaled: Delete, и это не теория: дрилл «Loki пропал»
+    # (`kubectl scale sts loki --replicas=0`) удалил PVC storage-loki-0 вместе с
+    # логами за ~2 суток, а при возврате реплики создался пустой том. Для лабы логи
+    # не источник истины, но проверка алерта не должна стоить данных: любой
+    # «остановить компонент и посмотреть, сработает ли алерт» — штатный сценарий.
+    # whenDeleted оставлен Delete (дефолт): удаление релиза (`helmfile destroy`)
+    # по-прежнему убирает том — это контракт отката, он зафиксирован в AGENTS/runbook.
+    whenScaled: Retain
+    whenDeleted: Delete
 
 # Таргеты SimpleScalable (read/write/backend) в values чарта по умолчанию = 3 реплики,
 # и чарт падает на «replicas configured for both single binary and simple scalable»,
@@ -104,5 +114,21 @@ sidecar:
 monitoring:
   selfMonitoring:
     enabled: false
+  # 2026-11-07: метрики Loki в Prometheus. До этого ServiceMonitor не создавался, и
+  # у Prometheus не было даже серии up{job=...}: падение Loki и прекращение приёма
+  # логов были невидимы (косвенно ловился только под/STS, и молча — если объект
+  # удалён). Цена: ~2,2 тыс. серий /metrics (+~70–80 МБ TSDB на 72 ч при 30s).
+  # Метка release=monitoring обязательна: serviceMonitorSelector Prometheus —
+  # matchLabels release=monitoring (проверено на живом CR).
+  # ВАЖНО про job: шаблон чарта переписывает job в "monitoring/<service>", поэтому
+  # правила в rules/pipeline.yaml смотрят на job="monitoring/loki".
+  serviceMonitor:
+    enabled: true
+    labels:
+      release: monitoring
+    # 30s = scrapeInterval стека; дефолт чарта 15s рассчитан на его recording rules,
+    # которых у нас нет.
+    interval: 30s
+    scrapeTimeout: 10s
 minio:
   enabled: false

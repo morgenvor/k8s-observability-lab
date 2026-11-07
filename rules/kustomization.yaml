@@ -12,3 +12,4 @@ resources:
   - demo-slo-alerts.yaml
   - infra.yaml
   - meta.yaml
+  - pipeline.yaml

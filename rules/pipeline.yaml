@@ -1,0 +1,169 @@
+# Алерты пайплайна логов: Loki (приём и хранение) и Alloy (сбор и отправка).
+#
+# Зачем: до 2026-11-07 у этих компонентов не было ни одного своего алерта и ни одного
+# ServiceMonitor. Косвенно их жизнь была видна только через kube-state-metrics
+# (KubeStatefulSetReplicasMismatch, KubePodNotReady, KubeDaemonSet*), но:
+#   * удаление объекта (STS/DS) убирает и серию kube_* — все алерты чарта замолкают;
+#   * «жив, но не работает» (Loki не принимает строки, Alloy их теряет) не видно вообще:
+#     метрики в /metrics никто не скрейпил.
+# Поэтому первым шагом включены ServiceMonitor'ы (helm/values/loki.yaml,
+# helm/values/alloy.yaml), вторым — эти правила.
+#
+# Метка job у двух компонентов разная, и это не опечатка:
+#   * Loki: шаблон чарта переписывает job в "monitoring/<service>" (relabeling
+#     job -> monitoring/$1), поэтому job="monitoring/loki";
+#   * Alloy: шаблон чарта job не трогает, job = имя Service ("alloy").
+# Проверять не глазами, а `.tmp/rendered/helmfile.yaml` и живым /api/v1/targets.
+#
+# Severity по контракту проекта: page — только SLO burn-rate fast и SloRulesAbsent
+# (отказ сервиса), ticket — инфраструктурное событие для разбора, info — дефект
+# самого мониторинга. Логи не источник истины о доступности demo-api, поэтому отказ
+# Loki/Alloy — ticket, а не page: SLO продолжает считаться по метрикам.
+# Маршрут один (AlertmanagerConfig без матчеров), так что severity здесь — метка
+# для человека, а не переключатель доставки.
+#
+# Чего здесь сознательно нет:
+#   * отдельного AlloyNotSending — «Alloy не отправляет» и «Loki не принимает» с точки
+#     зрения наблюдаемости одно и то же; конец цепочки проверяет LokiNotIngesting,
+#     а потери на стороне Alloy точнее ловит AlloyDroppedLogs (там есть причина);
+#   * проверки самого Loki по /ready — нет метрики, только HTTP-статус; это работа
+#     для blackbox exporter, которого в проекте нет (вне объёма v1.0/v1.1);
+#   * алерта на «старые логи в Loki» (retention не работает) — retention проверяется
+#     косвенно: PVC 5Gi + PVCNearlyFull, а compactor-ошибки видны как рост PVC.
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: demo-logs-pipeline
+  namespace: monitoring
+  labels:
+    release: monitoring
+    app.kubernetes.io/name: demo-logs-pipeline
+    app.kubernetes.io/part-of: k8s-observability-lab
+spec:
+  groups:
+    - name: demo-logs-pipeline.loki
+      rules:
+        # Пара «цель есть, но не отвечает» и «цели нет вовсе» проверяется двумя
+        # правилами намеренно — как в meta.yaml: отсутствие серии up означает не
+        # «up=0», а «скрейпить нечего», и `up == 0` в этом случае не сработает
+        # никогда. Когда под Loki удалён или у него нет Ready-эндпоинта, цель
+        # исчезает за секунды, и единственный сигнал — absent().
+        - alert: LokiDown
+          expr: up{job="monitoring/loki", namespace="monitoring"} == 0
+          for: 5m
+          labels:
+            severity: ticket
+            service: loki
+            namespace: monitoring
+          annotations:
+            summary: "Loki: цель скрейпа не отвечает"
+            description: >-
+              /metrics Loki не отдаёт метрики дольше 5 минут при живой цели: процесс
+              завис или упёрся в память. Grafana в это время не читает логи, а Alloy
+              копит ошибки push. Проверь под loki-0, kubectl logs и /ready.
+            runbook_url: "docs/runbook.md"
+        - alert: LokiTargetMissing
+          expr: absent(up{job="monitoring/loki", namespace="monitoring"})
+          for: 10m
+          labels:
+            severity: ticket
+            service: loki
+            namespace: monitoring
+          annotations:
+            summary: "Loki: цели скрейпа нет вовсе"
+            description: >-
+              Серии up{job="monitoring/loki"} нет 10 минут: удалён StatefulSet или
+              Service, выключен ServiceMonitor, либо у Service нет готовых
+              эндпоинтов. В отличие от up == 0 это не «сломанный скрейп», а
+              «нечего скрейпить» — молчание не означает здоровье.
+            runbook_url: "docs/runbook.md"
+        # Конец цепочки logs: Alloy -> Loki. Если строки перестали приходить при
+        # живом Loki, сломано звено выше (Alloy, RBAC, сеть, config) — либо в лабе
+        # действительно нет ни одной новой строки лога, что для demo/monitoring
+        # маловероятно, но возможно. Поэтому info, а не ticket: цена ложного
+        # срабатывания выше цены пропущенного сигнала, а падение Alloy ловят
+        # отдельные правила ниже.
+        - alert: LokiNotIngesting
+          expr: sum(rate(loki_distributor_lines_received_total[15m])) == 0
+          for: 30m
+          labels:
+            severity: info
+            service: loki
+            namespace: monitoring
+          annotations:
+            summary: "Loki: строки не поступают"
+            description: >-
+              За 15 минут distributor Loki не принял ни одной строки, и так уже 30
+              минут. Проверь Alloy (DaemonSet 2/2, его логи), push-URL
+              loki.monitoring.svc:3100 и фильтр __meta_kubernetes_pod_node_name;
+              если всё цело — возможно, в demo и monitoring просто тихо.
+            runbook_url: "docs/runbook.md"
+
+    - name: demo-logs-pipeline.alloy
+      rules:
+        - alert: AlloyDown
+          expr: up{job="alloy", namespace="monitoring"} == 0
+          for: 5m
+          labels:
+            severity: ticket
+            service: alloy
+            namespace: monitoring
+          annotations:
+            summary: "Alloy: реплика не отдаёт метрики"
+            description: >-
+              Одна из реплик DaemonSet alloy не скрейпится дольше 5 минут: логи
+              подов этой ноды не собираются. Проверь под на нужной ноде, его логи и
+              статус DaemonSet.
+            runbook_url: "docs/runbook.md"
+        - alert: AlloyTargetMissing
+          expr: absent(up{job="alloy", namespace="monitoring"})
+          for: 10m
+          labels:
+            severity: ticket
+            service: alloy
+            namespace: monitoring
+          annotations:
+            summary: "Alloy: целей скрейпа нет вовсе"
+            description: >-
+              Серии up{job="alloy"} нет 10 минут: удалён DaemonSet или Service,
+              выключен ServiceMonitor, либо у сервиса нет эндпоинтов. Сбор логов
+              при этом стоит полностью, а не частично.
+            runbook_url: "docs/runbook.md"
+        # DaemonSet читает логи каждой ноды своей репликой, поэтому «меньше целей,
+        # чем нод» — это дыра в покрытии, даже когда уцелевшая реплика жива.
+        # Сравнение с kube_node_info, а не с replicas DaemonSet: число нод — факт,
+        # а status.numberReady DaemonSet'а обнуляется вместе с самим объектом.
+        - alert: AlloyCoverageIncomplete
+          expr: sum(up{job="alloy", namespace="monitoring"}) < count(kube_node_info)
+          for: 15m
+          labels:
+            severity: ticket
+            service: alloy
+            namespace: monitoring
+          annotations:
+            summary: "Alloy: реплик меньше, чем нод"
+            description: >-
+              Живых целей alloy меньше, чем нод в кластере: логи части нод не
+              собираются. Типичные причины — под не встал (ресурсы, taint),
+              реплика не скрейпится или DaemonSet кем-то урезан по nodeSelector.
+            runbook_url: "docs/runbook.md"
+        # Единственный сигнал о потере логов на стороне отправителя: причины из
+        # reason= (queue_is_full, rate_limited, ingester_error, ...) прямо говорят,
+        # что чинить. Счётчик не растёт в норме, поэтому порог «больше нуля».
+        - alert: AlloyDroppedLogs
+          expr: |
+            sum by (reason) (
+              rate(loki_write_dropped_entries_total{job="alloy", namespace="monitoring"}[10m])
+            ) > 0
+          for: 10m
+          labels:
+            severity: ticket
+            service: alloy
+            namespace: monitoring
+          annotations:
+            summary: "Alloy теряет логи (reason={{ $labels.reason }})"
+            description: >-
+              Alloy выбрасывает записи дольше 10 минут: очередь переполнена, Loki
+              отвечает ошибками или режет лимитами. Логи demo/monitoring теряются
+              безвозвратно — это не задержка, а пропуск. Смотри reason и логи Alloy.
+            runbook_url: "docs/runbook.md"

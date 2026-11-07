@@ -90,6 +90,109 @@ for disabled in loki-canary chunks-cache results-cache; do
 done
 printf 'ассерты Loki/Alloy: ok\n'
 
+# --- 3b. Метрики Loki/Alloy и хранилище Grafana в рендере ---------------------
+# Правила rules/pipeline.yaml держатся на соглашении о метке job: у Loki шаблон
+# чарта переписывает job в "monitoring/<service>", а у Alloy job = имя Service.
+# Соглашение живёт в шаблонах чартов, а не в наших values, поэтому проверяется по
+# рендеру: иначе обновление чарта молча отключило бы все алерты пайплайна логов
+# (правило «правила есть, а цели не совпадают» — худший вид тишины).
+step "метрики Loki/Alloy и PVC Grafana в рендере"
+python3 - .tmp/rendered/helmfile.yaml rules/pipeline.yaml <<'PY'
+import sys
+
+import yaml
+
+render_path, rules_path = sys.argv[1], sys.argv[2]
+docs = [
+    d
+    for d in yaml.safe_load_all(open(render_path, encoding="utf-8"))
+    if isinstance(d, dict)
+]
+
+
+def fail(message):
+    sys.exit(message)
+
+
+def find(kind, name):
+    for doc in docs:
+        if doc.get("kind") == kind and (doc.get("metadata") or {}).get("name") == name:
+            return doc
+    fail(f"{kind} {name}: нет в рендере helmfile (проверь values и версию чарта)")
+
+
+for sm_name in ("loki", "alloy"):
+    sm = find("ServiceMonitor", sm_name)
+    labels = (sm.get("metadata") or {}).get("labels") or {}
+    if labels.get("release") != "monitoring":
+        fail(
+            f"ServiceMonitor {sm_name}: нет метки release=monitoring — Prometheus"
+            " (serviceMonitorSelector matchLabels) его не подхватит"
+        )
+    ports = [endpoint.get("port") for endpoint in sm["spec"]["endpoints"]]
+    if "http-metrics" not in ports:
+        fail(f"ServiceMonitor {sm_name}: ожидался порт http-metrics, в рендере {ports}")
+
+# Loki: чарт сам переписывает job -> "monitoring/<service>". Если это правило
+# исчезнет, up{job="monitoring/loki"} перестанет существовать, а правила начнут
+# молчать (LokiDown/NotIngesting не увидят цель, TargetMissing — увидит).
+loki_endpoint = find("ServiceMonitor", "loki")["spec"]["endpoints"][0]
+job_relabel = [
+    r
+    for r in loki_endpoint.get("relabelings") or []
+    if r.get("targetLabel") == "job"
+]
+if not job_relabel:
+    fail(
+        "ServiceMonitor loki: пропал relabeling job -> monitoring/<service>."
+        ' Правила в rules/pipeline.yaml смотрят на job="monitoring/loki"'
+    )
+if not str(job_relabel[0].get("replacement", "")).startswith("monitoring/"):
+    fail(
+        "ServiceMonitor loki: relabeling job больше не даёт префикс monitoring/ —"
+        " поправь правила rules/pipeline.yaml и этот ассерт"
+    )
+
+rules_text = open(rules_path, encoding="utf-8").read()
+for selector in ('job="monitoring/loki"', 'job="alloy"'):
+    if selector not in rules_text:
+        fail(f"{rules_path}: нет {selector} — правила пайплайна логов разошлись с метками рендера")
+
+# Grafana: /var/lib/grafana обязан быть на PVC. С emptyDir при каждом рестарте пода
+# теряются user.timezone, starred-дашборды и прочее состояние из grafana.db —
+# ровно то, что дашборды из ConfigMap не восстанавливают.
+grafana = find("Deployment", "monitoring-grafana")
+volumes = grafana["spec"]["template"]["spec"]["volumes"]
+pvc_volumes = [v for v in volumes if "persistentVolumeClaim" in v]
+if not pvc_volumes:
+    fail(
+        "Deployment monitoring-grafana: /var/lib/grafana снова на emptyDir — настройки"
+        " пользователя (timezone, starred) не переживут рестарт"
+    )
+claim_name = pvc_volumes[0]["persistentVolumeClaim"]["claimName"]
+claim = find("PersistentVolumeClaim", claim_name)
+if not (claim.get("spec", {}).get("resources", {}).get("requests") or {}).get("storage"):
+    fail(f"PVC {claim_name}: не задан размер — чарт не сможет создать claim")
+# Loki: масштабирование в 0 не должно удалять том. Дефолт чарта whenScaled: Delete,
+# и это уже стоило данных: дрилл 2026-11-07 удалил storage-loki-0 вместе с логами.
+loki_sts = find("StatefulSet", "loki")
+policy = loki_sts["spec"].get("persistentVolumeClaimRetentionPolicy") or {}
+if policy.get("whenScaled") != "Retain":
+    fail(
+        "StatefulSet loki: whenScaled=%r, ожидался Retain — scale в 0 удалит PVC"
+        % policy.get("whenScaled")
+    )
+
+strategy = (grafana["spec"].get("strategy") or {}).get("type")
+if strategy != "Recreate":
+    fail(
+        f"Deployment monitoring-grafana: strategy={strategy}, ожидалась Recreate."
+        " RWO-PVC на local-path при RollingUpdate даёт Multi-Attach на второй ноде и"
+        " подвисший rollout"
+    )
+print("ассерты метрик пайплайна и PVC Grafana: ok")
+PY
+
 # --- 4. Свои манифесты: kustomize + kubeconform ------------------------------
 step "kubectl kustomize . -> kubeconform"
 kubectl kustomize . > .tmp/rendered/kustomize.yaml

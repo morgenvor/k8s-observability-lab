@@ -30,6 +30,15 @@ releases:
     version: 7.5.0
     values:
       - helm/values/loki.yaml
+    # 2026-11-07: шаблон ServiceMonitor этого чарта гейтится на
+    # `.Capabilities.APIVersions.Has "monitoring.coreos.com/v1/ServiceMonitor"`.
+    # В офлайн-рендере (`helmfile template` без кластера) CRD не видна, и объект
+    # молча выпадал из рендера: значения включены, а проверить их воротами нечем.
+    # Поле объявляет тип только для этого релиза; на живой кластер не влияет —
+    # там CRD установлена. В helmfile 1.8.2 оно есть на релизе, а не в
+    # helmDefaults (там ключ удалён).
+    apiVersions:
+      - monitoring.coreos.com/v1/ServiceMonitor
   - name: alloy
     namespace: monitoring
     createNamespace: false

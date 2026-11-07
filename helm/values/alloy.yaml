@@ -138,6 +138,19 @@ controller:
       - name: alloy-data
         emptyDir: {}
 
+# 2026-11-07: метрики Alloy в Prometheus (раньше ServiceMonitor не создавался, и
+# «Alloy жив, но не отправляет» было невидимо — ни up, ни loki_write_* в Prometheus).
+# Метка release=monitoring обязательна: serviceMonitorSelector Prometheus —
+# matchLabels release=monitoring. job здесь = имя Service ("alloy"): шаблон чарта
+# job не переписывает (в отличие от Loki), это учтено в rules/pipeline.yaml.
+# Метрик немного (~270 на реплику), но они дают единственный сигнал о выброшенных
+# логах: loki_write_dropped_entries_total{reason=...}.
+serviceMonitor:
+  enabled: true
+  additionalLabels:
+    release: monitoring
+  interval: 30s
+
 # Дефолтный ClusterRole чарта шире, чем нужно: в `rbac.rules` он даёт cluster-wide
 # `secrets`, `configmaps`, CRD monitoring.coreos.com и ещё десяток ресурсов. Для
 # discovery.kubernetes(role=pod) и loki.source.kubernetes хватает чтения подов и их
