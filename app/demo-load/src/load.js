@@ -18,6 +18,12 @@ export const DEFAULT_TARGET_URL = 'http://toxiproxy.demo:12001/work';
 export const DEFAULT_RPS = 5;
 export const DEFAULT_CONCURRENCY = 2;
 export const DEFAULT_TIMEOUT_MS = 1000;
+// Готовность цикла: если тик не случался дольше, нагрузка стоит, и SLI «нет данных»
+// вместо «всё хорошо». 10 с — два интервала по 5 rps и с запасом на CPU-лимит 100m.
+export const DEFAULT_READY_STALE_MS = 10_000;
+// Предел тела ответа upstream: оно дочитывается ради честной длительности, но
+// без предела чужой сервис мог бы заставить демон памяти съесть гигабайты.
+export const MAX_UPSTREAM_BODY_BYTES = 1024 * 1024;
 
 // Те же бакеты, что у demo-api; 0.3 обязателен для latency-SLO (доля <= 300 мс).
 export const DURATION_BUCKETS = [0.005, 0.01, 0.025, 0.05, 0.1, 0.2, 0.3, 0.5, 1, 2, 5];
@@ -49,6 +55,35 @@ export function createMetrics() {
   return { registry, loadRequestsTotal, loadRequestDuration, loadTicksSkipped };
 }
 
+// Тело ответа дочитываем, чтобы duration отражал полный обмен, но с пределом:
+// при превышении чтение отменяется, и это не считается успехом.
+async function readBoundedBody(res, limit = MAX_UPSTREAM_BODY_BYTES) {
+  const reader = res.body.getReader();
+  let bytes = 0;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) return { tooLarge: false };
+      bytes += value.byteLength;
+      if (bytes > limit) {
+        await reader.cancel();
+        return { tooLarge: true };
+      }
+    }
+  } finally {
+    reader.releaseLock();
+  }
+}
+
+// Границы параметров: конечные и положительные (concurrency — целое).
+function assertPositive(name, value, { integer = false } = {}) {
+  if (!Number.isFinite(value) || value <= 0 || (integer && !Number.isInteger(value))) {
+    throw new Error(
+      `${name} должен быть положительным ${integer ? 'целым ' : ''}числом, получено: ${value}`,
+    );
+  }
+}
+
 // Один запрос: исход классифицируется по клиентской стороне.
 //   ok       — ответ 2xx;
 //   error    — ответ не 2xx, сеть, DNS или соединение сброшено;
@@ -59,10 +94,11 @@ export async function probe(url, { timeoutMs = DEFAULT_TIMEOUT_MS, fetchImpl = f
 
   try {
     const res = await fetchImpl(url, { signal: AbortSignal.timeout(timeoutMs) });
-    await res.arrayBuffer(); // дочитываем тело, иначе duration не отражает полный обмен
+    const body = await readBoundedBody(res);
     return {
-      outcome: res.ok ? 'ok' : 'error',
+      outcome: res.ok && !body.tooLarge ? 'ok' : 'error',
       status: res.status,
+      bodyTooLarge: body.tooLarge,
       durationSeconds: elapsed(),
     };
   } catch (err) {
@@ -86,12 +122,24 @@ export function startLoadLoop({
   rps = DEFAULT_RPS,
   concurrency = DEFAULT_CONCURRENCY,
   timeoutMs = DEFAULT_TIMEOUT_MS,
+  readyStaleMs = DEFAULT_READY_STALE_MS,
   metrics,
   log,
   fetchImpl = fetch,
+  now = () => Date.now(),
 } = {}) {
+  // Валидация до создания таймера: rps: 0 давал Infinity в setInterval, а
+  // отрицательный concurrency — цикл, который никогда не грузит.
+  assertPositive('rps', rps);
+  assertPositive('concurrency', concurrency, { integer: true });
+  assertPositive('timeoutMs', timeoutMs);
   let inflight = 0;
+  let stopped = false;
+  // Момент последнего тика: готовность — это «цикл жив и тикал недавно», а не
+  // «процесс отвечает на HTTP». Пропущенные из-за concurrency тики тоже считаются.
+  let lastTickAt = now();
   const timer = setInterval(() => {
+    lastTickAt = now();
     if (inflight >= concurrency) {
       // Не warn: при сетевой задержке это ~3 события в секунду, то есть мусор
       // в Loki. Счётчик показывает то же самое и виден в метриках.
@@ -102,6 +150,12 @@ export function startLoadLoop({
     inflight += 1;
     probe(targetUrl, { timeoutMs, fetchImpl })
       .then((result) => {
+        if (result.bodyTooLarge) {
+          log('warn', 'upstream_body_too_large', {
+            limit: MAX_UPSTREAM_BODY_BYTES,
+            target_url: targetUrl,
+          });
+        }
         metrics.loadRequestsTotal.inc({ outcome: result.outcome });
         metrics.loadRequestDuration.observe(result.durationSeconds);
         log('info', 'load_request', {
@@ -114,9 +168,15 @@ export function startLoadLoop({
       .finally(() => {
         inflight -= 1;
       });
-  }, Math.round(1000 / rps));
+  }, Math.max(1, Math.round(1000 / rps)));
   timer.unref();
-  return { stop: () => clearInterval(timer) };
+  return {
+    stop: () => {
+      stopped = true;
+      clearInterval(timer);
+    },
+    isReady: () => !stopped && now() - lastTickAt <= readyStaleMs,
+  };
 }
 
 export function createApp({
@@ -125,21 +185,47 @@ export function createApp({
   rps = DEFAULT_RPS,
   concurrency = DEFAULT_CONCURRENCY,
   timeoutMs = DEFAULT_TIMEOUT_MS,
+  readyStaleMs = DEFAULT_READY_STALE_MS,
   fetchImpl = fetch,
+  now = () => Date.now(),
 } = {}) {
   const metrics = createMetrics();
   const log = createLogger(logStream);
 
   const server = http.createServer(async (req, res) => {
-    const { pathname } = new URL(req.url ?? '/', 'http://demo-load');
+    // pathname объявлен до try: new URL() бросает TypeError на мусорном request-target,
+    // а необработанный reject в async-обработчике роняет процесс (проверено 2026-11-04
+    // на demo-api и alert-sink).
+    let pathname;
+    try {
+      pathname = new URL(req.url ?? '/', 'http://demo-load').pathname;
+    } catch (err) {
+      // Мусорный request-target — ошибка клиента, а не сервера.
+      log('warn', 'request_bad_target', {
+        target: String(req.url ?? '').slice(0, 128),
+        error: err?.message ?? String(err),
+      });
+      res.writeHead(400, { 'content-type': 'text/plain; charset=utf-8' });
+      res.end('bad request\n');
+      return;
+    }
     if (req.method !== 'GET') {
       res.writeHead(405, { allow: 'GET', 'content-type': 'text/plain; charset=utf-8' });
       res.end('method not allowed\n');
       return;
     }
     if (pathname === '/healthz') {
+      // Живость процесса: цикл может стоять, но под убивать не за что.
       res.writeHead(200, { 'content-type': 'text/plain; charset=utf-8' });
       res.end('ok\n');
+      return;
+    }
+    if (pathname === '/ready') {
+      // Готовность нагрузки: цикл жив и тикал недавно. Стоящий цикл — это не «всё
+      // хорошо», а отсутствие SLI, поэтому 503, а не 200.
+      const ready = loop.isReady();
+      res.writeHead(ready ? 200 : 503, { 'content-type': 'text/plain; charset=utf-8' });
+      res.end(ready ? 'ready\n' : 'not ready\n');
       return;
     }
     if (pathname === '/metrics') {
@@ -160,15 +246,29 @@ export function createApp({
     res.end('not found\n');
   });
 
-  const loop = startLoadLoop({ targetUrl, rps, concurrency, timeoutMs, metrics, log, fetchImpl });
+  const loop = startLoadLoop({
+    targetUrl,
+    rps,
+    concurrency,
+    timeoutMs,
+    readyStaleMs,
+    metrics,
+    log,
+    fetchImpl,
+    now,
+  });
 
   return {
     server,
     metrics,
     log,
+    // Готовность цикла доступна и без HTTP: тестам и shutdown-пути не нужен запрос.
+    isReady: () => loop.isReady(),
+    // stop() возвращает промис close: вызывающий (SIGTERM) ждёт завершения,
+    // а не выходит сразу, обрывая открытые соединения.
     stop: () => {
       loop.stop();
-      server.close();
+      return new Promise((resolve) => server.close(resolve));
     },
   };
 }
@@ -192,8 +292,10 @@ function start() {
   });
   process.on('SIGTERM', () => {
     app.log('info', 'shutdown_started', {});
-    app.stop();
-    process.exit(0);
+    app.stop().then(() => process.exit(0));
+    // Если соединения не закрылись за 5 с — выходим принудительно, иначе под
+    // висит до SIGKILL и теряет окно graceful shutdown.
+    setTimeout(() => process.exit(1), 5000).unref();
   });
 }
 

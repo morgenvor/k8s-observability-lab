@@ -39,9 +39,12 @@ spec:
             - name: TARGET_URL
               value: http://toxiproxy.demo:12001/work
           readinessProbe:
+            # /ready, а не /healthz: под готов, только когда цикл нагрузки реально
+            # тикал недавно (иначе «живой, но не грузит» неотличим от нормы).
             httpGet:
-              path: /healthz
+              path: /ready
               port: http
+            initialDelaySeconds: 3
             periodSeconds: 5
             timeoutSeconds: 2
             failureThreshold: 3
