@@ -7,7 +7,7 @@
 import http from 'node:http';
 import { pathToFileURL } from 'node:url';
 
-import { Counter, Gauge, Registry } from 'prom-client';
+import { Counter, Gauge, Registry, collectDefaultMetrics } from 'prom-client';
 
 export const DEFAULT_PORT = 8080;
 // 1 MiB: группа алертов Alertmanager весит десятки килобайт, предел — защита от
@@ -23,10 +23,14 @@ export const TIMELINE_SIZE = 200;
 // по ~2 КБ ≈ 400 КБ) и переживает один крупный payload.
 export const TIMELINE_MAX_BYTES = 4 * 1024 * 1024;
 // Границы payload: alertname становится меткой Prometheus (alertsink_alert_events_total),
-// а число алертов — числом серий и записей кольца. Без лимитов любой под в кластере
-// POST'ом создаёт произвольную кардинальность (нашло ревью 2026-11-04).
+// а число алертов — числом серий и записей кольца. MAX_ALERTS ограничивает один запрос,
+// MAX_DISTINCT_ALERTNAMES — число разных имён за всё время жизни процесса: имена сверх
+// лимита учитываются как alertname="other", само имя остаётся в /timeline. Без этих
+// границ любой под в кластере POST'ом создавал бы произвольную кардинальность
+// (нашло ревью 2026-11-04).
 export const MAX_ALERTS = 200;
 export const MAX_ALERTNAME_LENGTH = 128;
+export const MAX_DISTINCT_ALERTNAMES = 200;
 
 const ALERT_STATUSES = new Set(['firing', 'resolved']);
 // Метка severity в метрике — старшая серьёзность уведомления. critical/warning здесь
@@ -67,6 +71,9 @@ function createLogger(stream = process.stdout) {
 
 export function createMetrics() {
   const registry = new Registry();
+  // Процессные метрики (cpu, память, event loop, gc) с префиксом alertsink_:
+  // без них не отличить «sink медленный» от «sink задыхается по памяти».
+  collectDefaultMetrics({ register: registry, prefix: 'alertsink_' });
 
   const notifications = new Counter({
     name: 'alertsink_notifications_total',
@@ -173,17 +180,26 @@ function buildEntry(payload, receivedAt) {
 }
 
 class BodyTooLargeError extends Error {}
+// Обрыв клиента посреди тела: отвечать некому, но запрос надо учесть (499).
+class BodyAbortedError extends Error {}
+// Клиент прислал заголовки и молчит: без таймаута сокет и промис живут бесконечно.
+class BodyTimeoutError extends Error {}
+
+export const BODY_READ_TIMEOUT_MS = 30_000;
 
 // Чтение тела с лимитом. Сверх лимита тело дочитывается вхолостую (chunks не растут),
 // поэтому клиент получает 413, а не обрыв соединения до ответа.
-// shortcut: для бесконечного тела нужен жёсткий таймаут чтения — когда у sink появится
-// внешний трафик, а не только Alertmanager в кластере.
-function readBody(req, limit = MAX_BODY_BYTES) {
+// Чтение всегда завершается: либо данными, либо обрывом клиента (BodyAbortedError),
+// либо таймаутом (BodyTimeoutError) — иначе запрос висит, пока клиент не уйдёт.
+function readBody(req, limit = MAX_BODY_BYTES, timeoutMs = BODY_READ_TIMEOUT_MS) {
   return new Promise((resolve, reject) => {
     const chunks = [];
     let size = 0;
     let tooLarge = false;
-    req.on('data', (chunk) => {
+    let settled = false;
+    let timer;
+
+    const onData = (chunk) => {
       size += chunk.length;
       if (size > limit) {
         tooLarge = true;
@@ -191,19 +207,51 @@ function readBody(req, limit = MAX_BODY_BYTES) {
         return;
       }
       chunks.push(chunk);
-    });
-    req.on('end', () => {
+    };
+    const cleanup = () => {
+      clearTimeout(timer);
+      req.off('data', onData);
+      req.off('end', onEnd);
+      req.off('error', onError);
+      req.off('close', onClose);
+    };
+    const fail = (err) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      reject(err);
+    };
+    const onEnd = () => {
+      if (settled) return;
+      settled = true;
+      cleanup();
       if (tooLarge) {
         reject(new BodyTooLargeError(`тело больше ${limit} байт`));
         return;
       }
       resolve(Buffer.concat(chunks).toString('utf8'));
-    });
-    req.on('error', reject);
+    };
+    const onError = (err) => fail(err);
+    // 'close' без 'end' — соединение оборвалось. req.complete снимает ложное
+    // срабатывание при нормальном завершении, когда close приходит после end.
+    const onClose = () => {
+      if (!req.complete) fail(new BodyAbortedError('клиент закрыл соединение до конца тела'));
+    };
+
+    timer = setTimeout(() => fail(new BodyTimeoutError(`тело не дочитано за ${timeoutMs} мс`)), timeoutMs);
+    timer.unref();
+    req.on('data', onData);
+    req.on('end', onEnd);
+    req.on('error', onError);
+    req.on('close', onClose);
   });
 }
 
-export function createApp({ logStream = process.stdout, clock = () => new Date() } = {}) {
+export function createApp({
+  logStream = process.stdout,
+  clock = () => new Date(),
+  bodyReadTimeoutMs = BODY_READ_TIMEOUT_MS,
+} = {}) {
   const metrics = createMetrics();
   const log = createLogger(logStream);
   const timeline = [];
@@ -211,6 +259,9 @@ export function createApp({ logStream = process.stdout, clock = () => new Date()
   // (число записей и байты), не меняя публичную форму записи /timeline.
   const timelineSizes = [];
   let timelineBytes = 0;
+  // Различные alertname, уже создавшие серию в метрике. Ограничение действует на
+  // весь процесс: Set растёт до MAX_DISTINCT_ALERTNAMES и дальше не пополняется.
+  const seenAlertnames = new Set();
 
   const record = (payload) => {
     const receivedAt = clock();
@@ -229,7 +280,17 @@ export function createApp({ logStream = process.stdout, clock = () => new Date()
     const severity = topSeverity(payload.alerts);
     metrics.notifications.inc({ status: payload.status, severity });
     for (const alert of payload.alerts) {
-      metrics.alertEvents.inc({ alertname: alert.labels.alertname, status: alert.status });
+      const alertname = alert.labels.alertname;
+      // Имя сверх лимита не создаёт новую серию: кардинальность метрики ограничена
+      // даже если клиент присылает уникальные имена. В /timeline имя настоящее.
+      if (!seenAlertnames.has(alertname)) {
+        if (seenAlertnames.size >= MAX_DISTINCT_ALERTNAMES) {
+          metrics.alertEvents.inc({ alertname: 'other', status: alert.status });
+          continue;
+        }
+        seenAlertnames.add(alertname);
+      }
+      metrics.alertEvents.inc({ alertname, status: alert.status });
     }
     metrics.lastNotification.set(receivedAt.getTime() / 1000);
 
@@ -273,7 +334,7 @@ export function createApp({ logStream = process.stdout, clock = () => new Date()
         respond(400, 'bad request\n');
         return;
       }
-      route = pathname;
+      route = routeKind(pathname);
 
       if (pathname === '/webhook') {
         if (req.method !== 'POST') {
@@ -281,19 +342,33 @@ export function createApp({ logStream = process.stdout, clock = () => new Date()
         } else {
           let raw;
           try {
-            raw = await readBody(req);
+            raw = await readBody(req, MAX_BODY_BYTES, bodyReadTimeoutMs);
           } catch (err) {
             if (err instanceof BodyTooLargeError) {
               log('warn', 'webhook_body_too_large', { limit: MAX_BODY_BYTES, error: err.message });
               respond(413, 'payload too large\n');
               return;
             }
-            // Клиент ушёл посреди тела (проверено: req/res destroyed, ECONNRESET).
-            // Это не отказ sink, и 500 в логе сбивал бы разбор недоставки; отвечать
-            // некому, поэтому только отметка 499 — соглашение nginx «client closed».
-            if (res.destroyed) {
-              log('warn', 'request_aborted', { route: pathname });
+            // Клиент ушёл посреди тела (req/res destroyed, ECONNRESET). Это не отказ
+            // sink, и 500 в логе сбивал бы разбор недоставки; отвечать некому,
+            // поэтому только отметка 499 — соглашение nginx «client closed».
+            if (err instanceof BodyAbortedError) {
+              log('warn', 'request_aborted', { route });
               status = 499;
+              return;
+            }
+            // Тело не дочитано за отведённое время: отвечаем 408 и рвём соединение,
+            // иначе сокет и промис останутся в памяти навсегда.
+            if (err instanceof BodyTimeoutError) {
+              log('warn', 'webhook_body_timeout', {
+                route,
+                timeout_ms: bodyReadTimeoutMs,
+                error: err.message,
+              });
+              respond(408, 'request timeout\n');
+              // Сокет закрываем после того, как ответ ушёл: destroy() сразу после
+              // end() может оборвать буфер и клиент не увидит 408.
+              res.once('finish', () => req.destroy());
               return;
             }
             throw err;
@@ -334,7 +409,14 @@ export function createApp({ logStream = process.stdout, clock = () => new Date()
         status = 499;
         return;
       }
-      log('error', 'request_failed', { error: err?.message ?? String(err), route });
+      // Поля как в http_request: статус и длительность считаем до лога.
+      const durationSeconds = Number(process.hrtime.bigint() - startedAt) / 1e9;
+      log('error', 'request_failed', {
+        route,
+        status,
+        duration_ms: Math.round(durationSeconds * 1000),
+        error: err?.message ?? String(err),
+      });
       if (!res.headersSent) respond(500, 'internal error\n');
     } finally {
       const durationSeconds = Number(process.hrtime.bigint() - startedAt) / 1e9;
@@ -344,13 +426,21 @@ export function createApp({ logStream = process.stdout, clock = () => new Date()
         status,
         duration_ms: Math.round(durationSeconds * 1000),
       });
-      // route здесь — уже нормализованный набор (или 'invalid' для мусорного
-      // request-target): сырой путь не должен попадать в метку.
-      metrics.requests.inc({ route: route === 'invalid' ? 'invalid' : routeKind(route), outcome: outcomeOf(status) });
+      // route уже нормализован (routeKind) или 'invalid' для мусорного
+      // request-target: сырой путь не должен попадать в метку.
+      metrics.requests.inc({ route, outcome: outcomeOf(status) });
     }
   });
 
-  return { server, metrics, timeline, log, stop: () => server.close() };
+  return {
+    server,
+    metrics,
+    timeline,
+    log,
+    // stop() возвращает промис close: SIGTERM ждёт завершения, а не обрывает
+    // соединения мгновенным process.exit.
+    stop: () => new Promise((resolve) => server.close(resolve)),
+  };
 }
 
 function start() {
@@ -371,8 +461,9 @@ function start() {
   });
   process.on('SIGTERM', () => {
     app.log('info', 'shutdown_started', {});
-    app.stop();
-    process.exit(0);
+    app.stop().then(() => process.exit(0));
+    // Если соединения не закрылись за 5 с — выходим принудительно.
+    setTimeout(() => process.exit(1), 5000).unref();
   });
 }
 

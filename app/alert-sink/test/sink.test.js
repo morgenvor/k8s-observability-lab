@@ -10,6 +10,7 @@ import {
   createApp,
   MAX_ALERTS,
   MAX_ALERTNAME_LENGTH,
+  MAX_DISTINCT_ALERTNAMES,
   MAX_BODY_BYTES,
   TIMELINE_MAX_BYTES,
   TIMELINE_SIZE,
@@ -228,6 +229,12 @@ test(`кольцо /timeline ограничено и по байтам (${TIMELI
   assert.equal(timeline.at(-1).group_key, `big-${posts - 1}`);
   const bytes = timeline.reduce((sum, entry) => sum + Buffer.byteLength(JSON.stringify(entry), 'utf8'), 0);
   assert.ok(bytes <= TIMELINE_MAX_BYTES, `кольцо занимает ${bytes} B при бюджете ${TIMELINE_MAX_BYTES} B`);
+  // Нижние границы: иначе тест проходил бы и на кольце из одной записи.
+  assert.ok(timeline.length >= 5, `кольцо заполнено всего на ${timeline.length} записей`);
+  assert.ok(
+    bytes > TIMELINE_MAX_BYTES - 400 * 1024,
+    `кольцо недозаполнено: ${bytes} B при бюджете ${TIMELINE_MAX_BYTES} B`,
+  );
 });
 
 test('truncated_alerts из payload виден в записи /timeline (по умолчанию 0)', async (t) => {
@@ -270,8 +277,74 @@ test('обрыв клиента посреди тела: лог request_aborted,
   assert.equal(webhookLogs.at(-1).status, 499);
 });
 
+test('молчащий клиент с Content-Length: 408 за конечное время и метрика client_error', async (t) => {
+  const { base, app, logs } = await startApp(t, { bodyReadTimeoutMs: 200 });
+  const socket = net.connect(app.server.address().port, '127.0.0.1', () => {
+    socket.write(
+      'POST /webhook HTTP/1.1\r\nHost: test\r\nContent-Type: application/json\r\nContent-Length: 1000\r\n\r\n{"status":',
+    );
+  });
+  socket.on('error', () => {});
+  socket.setEncoding('utf8');
+  let response = '';
+  const closed = new Promise((resolve) => {
+    socket.on('data', (chunk) => {
+      response += chunk;
+    });
+    socket.on('close', resolve);
+    setTimeout(resolve, 3000);
+  });
+  await closed;
+  // 408, а не бесконечное ожидание: клиент прислал заголовки и замолчал.
+  assert.match(response, /^HTTP\/1\.1 408/);
+
+  const body = await (await fetch(`${base}/metrics`)).text();
+  assert.equal(metricValue(body, 'alertsink_requests_total', { route: '/webhook', outcome: 'client_error' }), 1);
+  const entries = logs
+    .map((chunk) => chunk.trim())
+    .filter(Boolean)
+    .map((chunk) => JSON.parse(chunk));
+  assert.equal(entries.filter((entry) => entry.msg === 'webhook_body_timeout').length, 1);
+  assert.equal(
+    entries.filter((entry) => entry.msg === 'http_request' && entry.route === '/webhook').at(-1).status,
+    408,
+  );
+});
+
+test('после таймаута чтения тела сервер закрывается штатно', async () => {
+  const app = createApp({ logStream: { write: () => {} }, bodyReadTimeoutMs: 100 });
+  app.server.listen(0, '127.0.0.1');
+  await once(app.server, 'listening');
+  const socket = net.connect(app.server.address().port, '127.0.0.1', () => {
+    socket.write(
+      'POST /webhook HTTP/1.1\r\nHost: test\r\nContent-Type: application/json\r\nContent-Length: 100\r\n\r\n{"status":',
+    );
+  });
+  socket.on('error', () => {});
+  // Читаем ответ, иначе приостановленный сокет не отдаёт 'close' — тест ждал бы
+  // таймаута, ничего не проверяя.
+  socket.setEncoding('utf8');
+  socket.on('data', () => {});
+  await new Promise((resolve) => {
+    socket.on('close', resolve);
+    setTimeout(resolve, 3000);
+  });
+  // Незавершённое чтение не должно держать сокет: иначе close() висит, а под
+  // не проходит graceful shutdown.
+  await new Promise((resolve, reject) => {
+    const timer = setTimeout(
+      () => reject(new Error('server.close() не завершился: сокет остался открыт')),
+      2000,
+    );
+    app.server.close(() => {
+      clearTimeout(timer);
+      resolve();
+    });
+  });
+});
+
 test('метрика запросов: маршруты нормализованы, произвольный путь не создаёт серий', async (t) => {
-  const { base } = await startApp(t);
+  const { base, logs } = await startApp(t);
   const token = `nope-${Math.random().toString(16).slice(2, 10)}`;
   assert.equal((await fetch(`${base}/${token}`)).status, 404);
   assert.equal((await fetch(`${base}/healthz`)).status, 200);
@@ -279,6 +352,14 @@ test('метрика запросов: маршруты нормализован
   assert.equal(metricValue(body, 'alertsink_requests_total', { route: 'other', outcome: 'client_error' }), 1);
   assert.equal(metricValue(body, 'alertsink_requests_total', { route: '/healthz', outcome: 'ok' }), 1);
   assert.ok(!body.includes(token), 'сырой путь не должен попадать в метки Prometheus');
+  // Лог — второй канал, и сырой путь в нём тоже не нужен: разбор в Loki не должен
+  // зависеть от того, что написал клиент.
+  const request = logs
+    .map((chunk) => chunk.trim())
+    .filter(Boolean)
+    .map((chunk) => JSON.parse(chunk))
+    .find((entry) => entry.msg === 'http_request' && entry.status === 404);
+  assert.equal(request.route, 'other');
 });
 
 test('служебные маршруты: /healthz, 404, 405 и JSON-логи', async (t) => {
@@ -310,6 +391,9 @@ test('мусорный request-target: 400 и процесс жив', async (t) 
   assert.match(response, /^HTTP\/1\.1 400/);
   // Кольцо /timeline живёт в памяти: падение процесса стёрло бы evidence дрилла.
   assert.equal((await fetch(`${base}/healthz`)).status, 200);
+  // У мусорного target своя серия: он не «другой маршрут», а невалидный запрос.
+  const body = await (await fetch(`${base}/metrics`)).text();
+  assert.equal(metricValue(body, 'alertsink_requests_total', { route: 'invalid', outcome: 'client_error' }), 1);
 });
 
 test('смешанные severity: метка — старшая (page > ticket > info), без severity — none', async (t) => {
@@ -327,6 +411,30 @@ test('смешанные severity: метка — старшая (page > ticket 
   assert.equal(metricValue(body, 'alertsink_notifications_total', { status: 'firing', severity: 'ticket' }), 0);
   assert.equal(metricValue(body, 'alertsink_notifications_total', { status: 'firing', severity: 'info' }), 0);
   assert.equal(metricValue(body, 'alertsink_notifications_total', { status: 'firing', severity: 'none' }), 0);
+});
+
+test(`различных alertname не больше ${MAX_DISTINCT_ALERTNAMES}: сверх лимита — other`, async (t) => {
+  const { base } = await startApp(t);
+  for (let i = 0; i <= MAX_DISTINCT_ALERTNAMES; i += 1) {
+    const response = await postWebhook(base, {
+      status: 'firing',
+      alerts: [{ status: 'firing', labels: { alertname: `Unique${i}` } }],
+    });
+    assert.equal(response.status, 200);
+  }
+  const overflowName = `Unique${MAX_DISTINCT_ALERTNAMES}`;
+  const body = await (await fetch(`${base}/metrics`)).text();
+  assert.equal(metricValue(body, 'alertsink_alert_events_total', { alertname: 'other' }), 1);
+  assert.ok(!body.includes(overflowName), 'имя сверх лимита не должно попадать в метрики');
+  // Кольцо доказательств не страдает: в /timeline имя алерта настоящее.
+  const timeline = await (await fetch(`${base}/timeline`)).json();
+  assert.equal(timeline.at(-1).alerts[0].name, overflowName);
+});
+
+test('служебные метрики процесса отдаются с префиксом alertsink_', async (t) => {
+  const { base } = await startApp(t);
+  const body = await (await fetch(`${base}/metrics`)).text();
+  assert.match(body, /^alertsink_process_resident_memory_bytes /m);
 });
 
 test('отклонённое уведомление (400/413) не трогает метрики и кольцо', async (t) => {
