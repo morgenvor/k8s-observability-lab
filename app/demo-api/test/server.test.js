@@ -181,6 +181,61 @@ test('http_inflight_requests возвращается к базе после з�
   });
 });
 
+test('оборванный клиентом запрос учитывается как 499, не как 2xx', async () => {
+  await withApp(
+    async ({ base, app, lines }) => {
+      const socket = net.connect(app.server.address().port, '127.0.0.1', () => {
+        socket.write('GET /work HTTP/1.1\r\nHost: test\r\n\r\n');
+        setTimeout(() => socket.destroy(), 20);
+      });
+      socket.on('error', () => {});
+      await new Promise((resolve) => socket.on('close', resolve));
+      // work() блокирует event loop 200 мс — даём обработчику закончить и учесть запрос.
+      await new Promise((resolve) => setTimeout(resolve, 400));
+      const body = await (await fetch(`${base}/metrics`)).text();
+      assert.equal(metricValue(body, 'http_requests_total', { route: '/work', status_class: '2xx' }), 0);
+      assert.equal(metricValue(body, 'http_requests_total', { route: '/work', status_class: '4xx' }), 1);
+      const entries = lines
+        .map((chunk) => chunk.trim())
+        .filter(Boolean)
+        .map((chunk) => JSON.parse(chunk));
+      assert.equal(entries.filter((entry) => entry.msg === 'request_aborted').length, 1);
+      const request = entries.filter((entry) => entry.msg === 'http_request' && entry.route === '/work').at(-1);
+      assert.equal(request.status, 499);
+    },
+    {
+      // Асинхронная работа: пока идёт ожидание, сервер успевает заметить обрыв
+      // клиента (res.destroyed) — синхронный busy-loop блокирует event loop и
+      // обрыв обнаруживается уже после записи ответа.
+      work: () => new Promise((resolve) => setTimeout(() => resolve(0), 200)),
+    },
+  );
+});
+
+test('ошибка обработчика — 500, класс 5xx и лог request_failed', async () => {
+  await withApp(
+    async ({ base, lines }) => {
+      const res = await fetch(`${base}/work`);
+      assert.equal(res.status, 500);
+      const body = await (await fetch(`${base}/metrics`)).text();
+      assert.equal(metricValue(body, 'http_requests_total', { route: '/work', status_class: '5xx' }), 1);
+      const entries = lines
+        .map((chunk) => chunk.trim())
+        .filter(Boolean)
+        .map((chunk) => JSON.parse(chunk));
+      const failed = entries.filter((entry) => entry.msg === 'request_failed');
+      assert.equal(failed.length, 1);
+      assert.equal(failed[0].status, 500);
+      assert.match(failed[0].error, /boom/);
+    },
+    {
+      work: () => {
+        throw new Error('boom');
+      },
+    },
+  );
+});
+
 test('неизвестный путь маршрутизируется в шаблон other', () => {
   assert.equal(routeTemplate('/work'), '/work');
   assert.equal(routeTemplate('/work/123'), 'other');

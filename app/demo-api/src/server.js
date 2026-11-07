@@ -67,6 +67,14 @@ export function createApp({ logStream = process.stdout, work = syntheticWork } =
     };
 
     const respond = (code, body, headers = {}) => {
+      // Обрыв клиента: сокет уже уничтожен, отвечать некому. 499 — соглашение nginx
+      // «client closed request»; иначе оборванный /work считался бы успехом (2xx)
+      // и завышал SLI доступности.
+      if (res.destroyed) {
+        status = 499;
+        log('warn', 'request_aborted', { request_id: requestId, route });
+        return;
+      }
       status = code;
       res.writeHead(code, { 'content-type': 'text/plain; charset=utf-8', ...headers });
       res.end(body);
@@ -101,7 +109,9 @@ export function createApp({ logStream = process.stdout, work = syntheticWork } =
         const body = await metrics.registry.metrics();
         respond(200, body, { 'content-type': metrics.registry.contentType });
       } else if (pathname === '/work') {
-        const result = work();
+        // await, а не прямой вызов: тогда асинхронная работа (и метрики) даёт
+        // возможность заметить обрыв клиента до ответа, и respond учтёт его как 499.
+        const result = await work();
         respond(200, `${JSON.stringify({ ok: true, result })}\n`, {
           'content-type': 'application/json',
         });
