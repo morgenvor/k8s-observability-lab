@@ -518,14 +518,20 @@ kubectl -n demo get endpointslices -l kubernetes.io/service-name=demo-api \
 
 **Что означает `severity`:**
 
-| Метка | Кто ставит | Смысл | Куда идёт |
+| Метка | Кто ставит | Смысл | Куда идёт (v1.1) |
 |---|---|---|---|
 | `page` | наш проект (`rules/demo-slo-alerts.yaml`, `rules/meta.yaml`) | пользователь страдает или вот-вот начнёт: горит бюджет ошибок/латентности, сторожа правил молчат | e-mail |
 | `critical` | чарт kube-prometheus-stack | отказ компонента стека (например, `AlertmanagerFailedReload`) | e-mail |
 | `ticket` | наш проект (`rules/demo-slo-alerts.yaml`, `rules/infra.yaml`, `rules/pipeline.yaml`) | разберут в рабочее время: медленный burn, инфраструктура, пайплайн логов | `alert-sink` (`/timeline`) |
-| `info` | наш проект (`rules/pipeline.yaml`) | дефект мониторинга, а не отказ сервиса: телеметрия неполная, но пользователь жив | `alert-sink` |
+| `info` | наш проект (`rules/pipeline.yaml`, `rules/meta.yaml`) | дефект мониторинга, а не отказ сервиса: телеметрия неполная, но пользователь жив | `alert-sink` |
 | `warning` | чарт | ресурсы/состояние кластера, требует внимания, не срочно | `alert-sink` |
 | `none` | чарт (`Watchdog`) | «доставка работает»: всегда firing | `alert-sink` |
+
+Последняя колонка — **контракт маршрута v1.1, ещё не действующий**: в текущем
+`deploy/monitoring/alertmanagerconfig.yaml` маршрут **один** (без матчеров), и всё,
+включая `page` и `critical`, приходит в `alert-sink` (`/timeline`). Ветки по `severity`
+и e-mail для `page|critical` — Phase 3 плана v1.1; до неё колонку читай как цель, а не
+как факт. Проверить, что действует сейчас — раздел «Маршрут уведомлений и alert-sink».
 
 **Порядок разбора** (сначала факт, потом причина — иначе легко чинить не то):
 
@@ -631,7 +637,7 @@ kube-prometheus-stack.
   метрик, для Loki — срок хранения логов.
 - `NodeMemoryAvailableLow` (ticket) — `node_memory_MemAvailable_bytes / MemTotal < 0.15`
   дольше 10 минут. `kubectl describe node <нода>` → секция `Allocated resources`
-  (`kubectl top` в лабе пуст: metrics-server не ставится). Это граница headroom:
+  (`kubectl top` пуст: metrics-server не ставится). Это граница headroom:
   следующая раскатка может упереться в память. Более поздний случай (<10 %) ловит
   правило чарта `NodeMemoryHighUtilization`.
 
@@ -651,8 +657,9 @@ kube-prometheus-stack.
   живы, а страниц нет. Первый шаг — тот же `/api/v1/rules`; селектор по `rule_group`
   держится на формате `<путь>;<имя группы>` (проверено на стенде), поэтому ищи хвост
   `;demo-slo.alerts.availability`.
-- `SloDemoNoTraffic` (info) — `demo-load` жив, но 10 минут не отправлял запросов (или
-  цель `demo-load` пропала из Prometheus). Проверь под `demo-load`, его логи,
+- `SloDemoNoTraffic` (info) — `demo-load` жив, но за 10 минут не отправил ни одного
+  запроса — и так уже 15 минут (правило держит `for: 15m`); либо цель `demo-load`
+  пропала из Prometheus совсем. Проверь под `demo-load`, его логи,
   `load_ticks_skipped_total` и конфиг toxiproxy: генератор мог остаться без цели.
   `info`, а не page: «нет трафика» — не отказ сервиса, а дефект фикстуры.
 
@@ -687,8 +694,13 @@ kube-prometheus-stack.
 
 ### Путь уведомлений
 
-Два правила `rules/notifications.yaml` (группа `demo-alerting-path.heartbeat`)
-сторожат сам путь «Alertmanager → sink», потому что правила чарта
+**Статус: не реализовано.** Правил ниже ещё нет в наборе — файл
+`rules/notifications.yaml` появится в Phase 4 плана v1.1; до этого на этот подраздел не
+ссылается ни один `runbook_url`. Раздел описывает, что именно будет сторожить этот путь
+и как его проверять уже сейчас: сигнала о полном молчании маршрута у чарта нет.
+
+Два правила `rules/notifications.yaml` (группа `demo-alerting-path.heartbeat`) будут
+сторожить сам путь «Alertmanager → sink», потому что правила чарта
 (`AlertmanagerFailedToSendAlerts`, `AlertmanagerClusterFailedToSendAlerts`) видят
 только ошибки отправки, а не полное молчание маршрута:
 
@@ -708,9 +720,10 @@ kube-prometheus-stack.
 2. `/timeline` — пусто или старые записи? Пусто при живом sink → маршрут.
 3. `kubectl -n monitoring get alertmanagerconfig`, затем сгенерированный конфиг:
    `kubectl -n monitoring get secret alertmanager-monitoring-kube-prometheus-alertmanager-generated -o jsonpath='{.data.alertmanager\.yaml\.gz}' | base64 -d | gunzip | grep -A3 webhook_configs`
-   — catch-all child-route на месте?
+   — маршрут на месте? Сейчас он один, без child-routes; после Phase 3 проверяй ещё и
+   наличие catch-all child-route (без матчеров).
 4. `alertmanager_config_last_reload_successful{job="monitoring-kube-prometheus-alertmanager"}`
-   и лог Alertmanager: ошибка конфига останавливает **всю** доставку, включая e-mail.
+   и лог Alertmanager: ошибка конфига останавливает **всю** доставку.
 5. Состояние самого sink: `up{job="alert-sink"}`, `kubectl -n demo logs deploy/alert-sink`.
 
 Устройство маршрута и проверка доставки — раздел «Маршрут уведомлений и alert-sink».
