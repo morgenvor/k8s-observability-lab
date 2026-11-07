@@ -22,14 +22,14 @@ Pet-проект про эксплуатацию: SLI/SLO с burn-rate алер�
 flowchart LR
   load["demo-load<br/>5 rps"] --> toxiproxy["toxiproxy<br/>инъекция сетевых сбоев"]
   toxiproxy --> api["demo-api ×2<br/>RED-метрики + JSON-логи"]
-  api -- "/metrics, клиентские метрики" --> prometheus["Prometheus<br/>запись SLI и burn rate"]
-  api -- "stdout через Kubernetes API" --> alloy["Alloy DaemonSet<br/>одна реплика на ноду"]
+  api -->|"/metrics, клиентские метрики"| prometheus["Prometheus<br/>запись SLI и burn rate"]
+  api -->|"stdout через Kubernetes API"| alloy["Alloy DaemonSet<br/>одна реплика на ноду"]
   alloy --> loki["Loki<br/>retention 72h"]
   prometheus --> grafana["Grafana<br/>demo-red, slo-demo"]
   loki --> grafana
   prometheus --> alertmanager["Alertmanager<br/>маршрут по severity"]
-  alertmanager -- "ticket, info, warning, none" --> sink["alert-sink<br/>/timeline + метрики"]
-  alertmanager -- "page, critical" --> email["e-mail (SMTP)"]
+  alertmanager -->|"ticket, info, warning, none"| sink["alert-sink<br/>/timeline + метрики"]
+  alertmanager -->|"page, critical"| email["e-mail (SMTP)"]
 ```
 
 ## Маршрут алертов
@@ -37,10 +37,9 @@ flowchart LR
 ```mermaid
 flowchart TD
   alert["алерт в Alertmanager"] --> severity{"severity"}
-  severity -- "page, critical" --> email["receiver email<br/>SMTP, sendResolved"]
-  severity -- "ticket, info, warning, none" --> sink["receiver alert-sink<br/>webhook → /timeline"]
-  severity -- "catch-all: всё, что не совпало" --> sink
-  sink --> watchdog["Watchdog<br/>heartbeat маршрута"]
+  severity -->|"page, critical"| email["receiver email<br/>SMTP, sendResolved"]
+  severity -->|"ticket, info, warning, none"| sink["receiver alert-sink<br/>webhook → /timeline"]
+  severity -->|"catch-all: всё, что не совпало"| sink
 ```
 
 Почему нужен явный catch-all: у наших правил `severity ∈ {page, ticket, info}`, у правил
