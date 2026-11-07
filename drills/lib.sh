@@ -11,10 +11,13 @@
 #   cleanup          — гарантированное снятие инъекций (через trap EXIT), даже при провале.
 #
 # Доказательство — evidence/<YYYY-MM-DD>-<drill>.json, схема drill-evidence/v1:
-#   {schema, drill, cluster_version, started_at, finished_at,
+#   {schema, result: passed|failed, drill, cluster_version, started_at, finished_at,
+#    images: {demo_api, demo_load, alert_sink},
 #    assertions: [{name, expected, actual, passed}],
 #    timeline:   [{t, step, detail}],
 #    alerts:     [{name, fired_at, resolved_at, source}]}
+# result: failed — проваленное утверждение, ошибка cleanup, прерывание сигналом
+# (INT/TERM) или отсутствие финального события done.
 # Все даты — UTC ISO-8601. Алерты берутся из /timeline alert-sink (это доказательство
 # доставки), а не из Prometheus: «алерт горел» и «уведомление дошло» — разные факты.
 
@@ -29,8 +32,10 @@ DRILL_PROM_PORT="${DRILL_PROM_PORT:-19091}"
 DRILL_SINK_PORT="${DRILL_SINK_PORT:-18081}"
 DRILL_TOXI_PORT="${DRILL_TOXI_PORT:-18475}"
 
-EVIDENCE_DIR="${PROJECT_ROOT}/evidence"
-DRILL_STATE_DIR="${PROJECT_ROOT}/.tmp/drills"
+# Каталоги переопределяемы: офлайн-тест сигналов (drills/tests/signals.sh) пишет
+# свои прогоны в .tmp и не должен трогать настоящие доказательства.
+: "${EVIDENCE_DIR:=${PROJECT_ROOT}/evidence}"
+: "${DRILL_STATE_DIR:=${PROJECT_ROOT}/.tmp/drills}"
 
 DRILL_NAME=""
 DRILL_STARTED_AT=""
@@ -41,9 +46,13 @@ DRILL_EVENTS=""
 DRILL_ASSERTIONS=""
 DRILL_ALERTS=""
 DRILL_FAILED=0
+# 1 — дрилл прервали сигналом (INT/TERM): такой прогон не может быть passed.
+DRILL_INTERRUPTED=0
 DRILL_CLEANUP_DONE=0
 DRILL_CLUSTER_VERSION="unknown"
-DRILL_IMAGE_TAG="unknown"
+# Теги образов всех трёх сервисов: evidence должен говорить, на каком SHA снят,
+# иначе «passed» через неделю относится к неизвестному коду.
+declare -A DRILL_IMAGES=()
 WAIT_ALERT_AT=""
 WAIT_ALERT_EPOCH=0
 WAIT_RESOLVED_AT=""
@@ -65,6 +74,22 @@ declare -a CLEANUP_ARGS=()
 # видел пустой массив и оставлял форварды висеть (нашло ревью 2026-11-06). Поэтому PID
 # пишется ещё и в файл состояния дрилла: его видно из любой подстановки.
 _pf_state_file() { printf '%s/%s.forwards' "${DRILL_STATE_DIR}" "${DRILL_NAME}"; }
+
+# Осиротевшие форварды прошлого прогона: файл состояния переживает SIGKILL/закрытый
+# терминал, а PID переиспользуются ОС. Поэтому бьём только процесс, который в самом
+# деле `kubectl port-forward` нужного порта, а не любой процесс с тем же PID.
+_pf_kill_stale() {
+  local file port pid ns svc remote probe args
+  file="$(_pf_state_file)"
+  [ -f "${file}" ] || return 0
+  while read -r port pid ns svc remote probe; do
+    [ -n "${pid:-}" ] || continue
+    args="$(ps -p "${pid}" -o args= 2>/dev/null || true)"
+    case "${args}" in
+      *port-forward*" ${port}:"*) kill "${pid}" >/dev/null 2>&1 || true ;;
+    esac
+  done <"${file}"
+}
 
 _pf_record() { # <local_port> <pid> <ns> <svc> <remote_port> <probe_path>
   local file line
@@ -361,6 +386,11 @@ drill_cleanup_add() { # <описание> <функция> [аргументы.
   CLEANUP_ARGS+=("${*:3}")
 }
 
+# Тег образа деплоймента; общая функция для всех трёх сервисов.
+_deploy_image_tag() { # <deploy>
+  kubectl -n "${DEMO_NS}" get deploy "$1" -o jsonpath='{.spec.template.spec.containers[0].image}'     | sed 's/^.*://'
+}
+
 _drill_write_evidence() {
   local finished tmp result="passed"
   finished="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
@@ -373,7 +403,9 @@ _drill_write_evidence() {
     --arg cluster "${DRILL_CLUSTER_VERSION}" \
     --arg started "${DRILL_STARTED_AT}" \
     --arg finished "${finished}" \
-    --arg image "${DRILL_IMAGE_TAG}" \
+    --arg demo_api "${DRILL_IMAGES[demo-api]:-unknown}" \
+    --arg demo_load "${DRILL_IMAGES[demo-load]:-unknown}" \
+    --arg alert_sink "${DRILL_IMAGES[alert-sink]:-unknown}" \
     --slurpfile assertions "${DRILL_ASSERTIONS}" \
     --slurpfile timeline "${DRILL_EVENTS}" \
     --slurpfile alerts "${DRILL_ALERTS}" '
@@ -394,7 +426,7 @@ _drill_write_evidence() {
                      resolved_at: ([.[] | select(.status == "resolved") | .at] | last),
                      source: "alert-sink"
                    })),
-        images: {demo_api: $image}
+        images: {demo_api: $demo_api, demo_load: $demo_load, alert_sink: $alert_sink}
       }' >"${tmp}"; then
     warn "не удалось собрать evidence ${DRILL_EVIDENCE}"
     return 1
@@ -407,15 +439,19 @@ drill_cleanup() {
   local code=$?
   [ "${DRILL_CLEANUP_DONE}" -eq 1 ] && return 0
   DRILL_CLEANUP_DONE=1
-  trap - EXIT
+  # Все ловушки снимаются: иначе второй сигнал во время cleanup зациклил бы выход.
+  trap - EXIT INT TERM
   set +e
   local i
   if [ "${#CLEANUP_FUNCS[@]}" -gt 0 ]; then
     info "cleanup: снимаю инъекции"
     for (( i = ${#CLEANUP_FUNCS[@]} - 1; i >= 0; i-- )); do
       printf '  - %s\n' "${CLEANUP_DESCS[i]}"
+      # Подоболочка обязательна: die/exit внутри шага (например, неудачный patch в
+      # _pf_restart) должен гасить только этот шаг, а не весь cleanup вместе с
+      # записью evidence.
       # shellcheck disable=SC2086  # аргументы шага cleanup собраны drill_cleanup_add
-      if ! "${CLEANUP_FUNCS[i]}" ${CLEANUP_ARGS[i]}; then
+      if ! ( "${CLEANUP_FUNCS[i]}" ${CLEANUP_ARGS[i]} ); then
         warn "шаг cleanup «${CLEANUP_DESCS[i]}» не удался — проверь состояние demo вручную"
         DRILL_FAILED=1
       fi
@@ -438,6 +474,11 @@ drill_cleanup() {
   # Итог прогона выставляется ДО записи evidence: иначе поле result не увидит провал,
   # из-за которого дрилл завершается с ненулевым кодом.
   [ "${code}" -eq 0 ] || DRILL_FAILED=1
+  # Прерванный сигналом прогон не может быть passed, даже если код выхода кто-то
+  # подменил. И отдельно: успех требует финального события done — без него дрилл
+  # мог оборваться на середине, не увидев провала.
+  [ "${DRILL_INTERRUPTED}" -eq 0 ] || DRILL_FAILED=1
+  jq -e 'select(.step == "done")' "${DRILL_EVENTS}" >/dev/null 2>&1 || DRILL_FAILED=1
   _drill_write_evidence || DRILL_FAILED=1
   if [ "${DRILL_FAILED}" -eq 0 ]; then
     info "дрилл ${DRILL_NAME}: PASS"
@@ -460,6 +501,8 @@ drill_evidence_init() { # <drill>
   DRILL_ASSERTIONS="${DRILL_STATE_DIR}/${name}.assertions.ndjson"
   DRILL_ALERTS="${DRILL_STATE_DIR}/${name}.alerts.ndjson"
   # PID прошлого прогона не должны попасть в cleanup этого: номера переиспользуются.
+  # Сначала гасим сами форварды (по args, а не по PID), потом забываем файл.
+  _pf_kill_stale
   rm -f "$(_pf_state_file)"
 
   # Повторный прогон в тот же день не затирает доказательства: прежний файл и
@@ -489,6 +532,9 @@ drill_evidence_init() { # <drill>
   # чтобы evidence можно было перепроверить, не повторяя дрилл.
   exec > >(tee -a "${DRILL_CONSOLE}") 2>&1
   trap drill_cleanup EXIT
+  # SIGINT/SIGTERM прерывают дрилл, но cleanup обязан выполниться: иначе инъекция
+  # (токсин, readinessProbe, масштаб) осталась бы на стенде.
+  trap 'DRILL_INTERRUPTED=1; exit 130' INT TERM
   info "дрилл ${name}: старт ${DRILL_STARTED_AT}"
   event "start" "дрилл ${name} начат"
 }
@@ -502,8 +548,10 @@ drill_preflight() {
   need_cmd jq
   DRILL_CLUSTER_VERSION="$(kubectl get nodes -o json \
     | jq -r '.items[0].status.nodeInfo.kubeletVersion // "unknown"')"
-  DRILL_IMAGE_TAG="$(kubectl -n "${DEMO_NS}" get deploy demo-api \
-    -o jsonpath='{.spec.template.spec.containers[0].image}' | sed 's/^.*://')"
+  local image
+  for image in demo-api demo-load alert-sink; do
+    DRILL_IMAGES["${image}"]="$(_deploy_image_tag "${image}")"
+  done
 
   local d
   for d in demo-api demo-load alert-sink toxiproxy; do

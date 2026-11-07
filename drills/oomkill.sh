@@ -30,6 +30,13 @@ ALLOC_MB="${ALLOC_MB:-200}"
 EXPECT_REACTION="${EXPECT_REACTION:-300}"
 EXPECT_RECOVERY="${EXPECT_RECOVERY:-180}"
 
+# ALLOC_MB уходит прямо в код node -e: нечисловое значение либо ничего не выделит,
+# либо сломает инъекцию на середине дрилла. Проверяем до старта.
+case "${ALLOC_MB}" in
+  '' | *[!0-9]*) die "ALLOC_MB должен быть положительным целым, получено: '${ALLOC_MB}'" ;;
+esac
+[ "${ALLOC_MB}" -gt 0 ] || die "ALLOC_MB должен быть больше нуля, получено: ${ALLOC_MB}"
+
 drill_evidence_init oomkill
 drill_preflight
 
@@ -68,6 +75,10 @@ pod="$(kubectl -n "${DEMO_NS}" get pods -l app=demo-api \
 [ -n "${pod}" ] || die "нет Running-пода demo-api — инъекция невозможна"
 restarts_before="$(kubectl -n "${DEMO_NS}" get pod "${pod}" \
   -o jsonpath='{.status.containerStatuses[0].restartCount}')"
+# Пустое или нечисловое значение дало бы арифметику с "null" и ложный PASS/FAIL.
+case "${restarts_before}" in
+  '' | *[!0-9]*) die "restartCount пода ${pod} не число: '${restarts_before}'" ;;
+esac
 event "target" "под ${pod}, рестартов до дрилла: ${restarts_before}"
 
 event "inject" "kubectl exec ${pod}: пишу ${ALLOC_MB} MiB при лимите 128Mi"
@@ -103,6 +114,9 @@ kubectl -n "${DEMO_NS}" wait --for=condition=Ready pod -l app=demo-api \
   || die "под demo-api не вернулся в Ready за ${EXPECT_RECOVERY} с"
 restarts_after="$(kubectl -n "${DEMO_NS}" get pod "${pod}" \
   -o jsonpath='{.status.containerStatuses[0].restartCount}')"
+case "${restarts_after}" in
+  '' | *[!0-9]*) die "restartCount пода ${pod} после дрилла не число: '${restarts_after}'" ;;
+esac
 assert_num "restart_count_delta" ge 1 "$((restarts_after - restarts_before))"
 
 event "verify_spec" "сверяю .spec деплоймента с состоянием до дрилла"

@@ -13,13 +13,21 @@ ALL_DRILLS=(latency errors oomkill readiness)
 
 [ "$#" -gt 0 ] || die "укажи дрилл: ${ALL_DRILLS[*]} или all"
 
+# Дедупликация: `run.sh all latency` не должен прогонять latency дважды — дрилл
+# идёт ~20 минут, а повтор ещё и перезаписал бы свои же доказательства.
 DRILLS=()
+declare -A SEEN=()
 for arg in "$@"; do
   case "${arg}" in
-    all) DRILLS+=("${ALL_DRILLS[@]}") ;;
-    latency | errors | oomkill | readiness) DRILLS+=("${arg}") ;;
+    all) add_drills=("${ALL_DRILLS[@]}") ;;
+    latency | errors | oomkill | readiness) add_drills=("${arg}") ;;
     *) die "неизвестный дрилл '${arg}': ожидается ${ALL_DRILLS[*]} или all" ;;
   esac
+  for drill in "${add_drills[@]}"; do
+    [ -n "${SEEN[${drill}]:-}" ] && continue
+    SEEN["${drill}"]=1
+    DRILLS+=("${drill}")
+  done
 done
 
 mkdir -p "${EVIDENCE_DIR}"

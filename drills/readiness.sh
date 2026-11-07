@@ -97,7 +97,7 @@ event "baseline" "фиксирую пробу, число реплик и ready-
 PROBE_PATH_ORIGINAL="$(probe_path)"
 REPLICAS_ORIGINAL="$(kubectl -n "${DEMO_NS}" get deploy demo-api -o jsonpath='{.spec.replicas}')"
 assert_eq "readiness_probe_path_baseline" "/ready" "${PROBE_PATH_ORIGINAL}"
-assert_eq "endpoints_ready_baseline" "2" "$(endpoint_ready_count)"
+assert_eq "endpoints_ready_baseline" "${REPLICAS_ORIGINAL}" "$(endpoint_ready_count)"
 
 drill_cleanup_add \
   "вернуть readinessProbe ${PROBE_PATH_ORIGINAL} и ${REPLICAS_ORIGINAL} реплики" restore_spec
