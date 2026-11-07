@@ -31,6 +31,19 @@ prometheus:
       limits:
         cpu: 1000m
         memory: 1536Mi
+  # 2026-11-07: постоянный доступ к UI без port-forward. k3s уже публикует Traefik
+  # на 80/443 обеих нод (klipper-lb, `svclb-traefik`), поэтому второй контроллер не
+  # ставим — добавляем только Ingress-объекты. Host-based, а не по путям: у
+  # Prometheus и Alertmanager `--web.route-prefix=/`, и UI рассчитан на корень;
+  # смена routePrefix потянула бы рестарт подов (аптайм Prometheus — дни).
+  # `ingressClassName` явно, хотя `traefik` и так default: появится второй
+  # контроллер — маршруты не «уедут» молча. Имена резолвятся через /etc/hosts
+  # (см. docs/runbook.md, раздел 4); без правильного Host Traefik отдаёт 404.
+  ingress:
+    enabled: true
+    ingressClassName: traefik
+    hosts:
+      - prometheus.lab.internal
 
 grafana:
   enabled: true
@@ -76,6 +89,14 @@ grafana:
     size: 1Gi
   deploymentStrategy:
     type: Recreate
+  # 2026-11-07: постоянный доступ к UI без port-forward — см. комментарий у
+  # `prometheus.ingress`. Grafana живёт на корне (`/`), root_url не задаём:
+  # при Host-маршрутизации с чужим именем `/login` отвечает 200 и без него.
+  ingress:
+    enabled: true
+    ingressClassName: traefik
+    hosts:
+      - grafana.lab.internal
 
 alertmanager:
   enabled: true
@@ -102,6 +123,16 @@ alertmanager:
       limits:
         cpu: 100m
         memory: 128Mi
+  # 2026-11-07: постоянный доступ к UI без port-forward — см. комментарий у
+  # `prometheus.ingress`. Важно: UI Alertmanager не имеет аутентификации, поэтому
+  # опубликованный маршрут позволяет из подсети лабы создавать/снимать silence,
+  # то есть глушить алерты. Для изолированной лабы принято осознанно; при
+  # расширении сети — basicAuth-мидлварь Traefik.
+  ingress:
+    enabled: true
+    ingressClassName: traefik
+    hosts:
+      - alertmanager.lab.internal
 
 prometheusOperator:
   resources:
