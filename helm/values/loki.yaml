@@ -84,7 +84,8 @@ backend:
   replicas: 0
 
 # Кеши выключаем: каждый чарт-кеш — отдельный memcached StatefulSet, а у нас
-# ~1 лог/с и лимит памяти ноды. Без кешей Loki работает, просто медленнее на чтении.
+# ~10 строк/с (5 rps demo-load + столько же demo-api) и лимит памяти ноды. Без кешей
+# Loki работает, просто медленнее на чтении.
 chunksCache:
   enabled: false
 resultsCache:
