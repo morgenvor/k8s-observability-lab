@@ -61,8 +61,10 @@ gh api -X PUT repos/morgenvor/k8s-observability-lab/branches/main/protection \
 ## 4. Прогон CI `[владелец]`
 
 Workflow `.github/workflows/ci.yml` запускается на push в `main` и на pull request.
-Локальный аналог — `./scripts/check.sh --strict`; CI отличается тем, что там
-предустановлены `yamllint`, `shellcheck` и `docker`.
+Локальный аналог — `./scripts/check.sh --strict`. Разница в окружении: в образе раннера
+`shellcheck` и `docker` есть сразу, `yamllint` и `pyyaml` ставит отдельный шаг
+(`python3 -m pip install yamllint pyyaml` — pyyaml нужен выгрузке `PrometheusRule`),
+а инструменты из `bootstrap-tools.sh` скачиваются в CI так же, как локально.
 
 ```bash
 gh run list --workflow=ci.yml --limit 5

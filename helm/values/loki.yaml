@@ -13,8 +13,9 @@ deploymentMode: SingleBinary
 loki:
   # Один тенант: X-Scope-OrgID и заголовки не нужны ни Alloy, ни Grafana.
   auth_enabled: false
-  # Образ пиннится тегом: 3.6.11 — версия, с которой чарт 7.5.0 поставляется, и та,
-  # что импортирована в containerd лабы. Новая версия = правка здесь + IMPORT_IMAGES.
+  # Образ пиннится явно: 3.6.11 — та версия, что импортирована в containerd лабы
+  # (appVersion чарта 7.5.0 = 3.6.16, дефолт чарта не используется). Новая версия =
+  # правка здесь + IMPORT_IMAGES на обе ноды.
   image:
     tag: 3.6.11
   commonConfig:

@@ -14,22 +14,28 @@
 
 ## Офлайн-ворота
 
-**2026-11-06, `./scripts/check.sh --images` на HEAD `c28879d`: `OK`, код возврата 0,
-пропусков нет.**
+**2026-11-07, `./scripts/check.sh --images` на HEAD `b8ef241`: `OK`, код возврата 0,
+пропусков нет** (ни один шаг не ушёл в «пропущено»: `docker`, `shellcheck` и `yamllint`
+были на месте).
 
 | Шаг | Результат |
 |---|---|
-| yamllint | 24 файла |
-| `npm ci` + тесты приложений | 35 тестов: 15 (`alert-sink`) + 14 (`demo-api`) + 6 (`demo-load`) |
-| `helmfile template` всех релизов → `kubeconform` | 128 объектов: `Valid: 85`, `Invalid: 0`, `Skipped: 43` (CRD без схемы в офлайне) |
+| yamllint | 26 файлов |
+| `npm ci` + тесты приложений | 48 тестов: 20 (`alert-sink`) + 16 (`demo-api`) + 12 (`demo-load`) |
+| `helmfile template` всех релизов → `kubeconform` | 134 объекта: `Valid: 89`, `Invalid: 0`, `Skipped: 45` (CRD без схемы в офлайне) |
 | ассерты семантики Loki/Alloy в рендере | ok (retention 72h, push-URL, фильтр по ноде, `ServiceMonitor` и relabeling `job`) |
-| `kustomize` → `kubeconform` | 20 объектов: `Valid: 12`, `Invalid: 0`, `Skipped: 8` |
-| JSON дашбордов, рендер оверлея с тегами | ok (3 образа подставлены) |
-| `promtool check rules` | 31 правило в 4 файлах |
-| `promtool test rules` | 3 файла, `SUCCESS` |
+| `kustomize` → `kubeconform` | 21 объект: `Valid: 12`, `Invalid: 0`, `Skipped: 9` |
+| JSON дашбордов, рендер оверлея с тегами | ok (2 файла `jq`, 3 образа подставлены) |
+| `promtool check rules` | 39 правил в 5 файлах (6 + 20 + 3 + 3 + 7) |
+| `promtool test rules` | 4 файла, `SUCCESS` |
+| тесты дриллов (`signals.sh`) | 3 сценария: SIGTERM → `failed`, штатный прогон → `passed`, сбой cleanup не мешает остальным шагам |
 | `shellcheck -S warning` | чисто по `scripts/*.sh` и `drills/*.sh` |
 | `docker build` | три образа (`alert-sink:check`, `demo-api:check`, `demo-load:check`) |
-| скан секретов и адресов | совпадений нет |
+| скан секретов и адресов | совпадений нет: приватные сети стенда, ключи и токены, имена нод, следы лабы в тексте; отдельно проверено, что `.secrets/` не в индексе |
+
+Числа зависят от состава HEAD, поэтому их место — рядом с коммитом: в прогоне 2026-11-06
+на `c28879d` было 24 файла yamllint, 35 тестов, 31 правило в 4 файлах и `kustomize` 20
+объектов — добавились `rules/pipeline.yaml` и тесты, которых тогда не было.
 
 В песочнице, где шли прогоны, шагам `npm ci` и `docker build` нужны кеши внутри проекта
 (`npm_config_cache`, `DOCKER_CONFIG`) — это ограничение среды, а не проекта.
@@ -37,7 +43,8 @@
 ## Дриллы (2026-11-05, стенд v1.37.1+k3s1)
 
 Все четыре прогона — `result: "passed"`, файлы `evidence/2026-11-05-*.json`, 31 утверждение
-(8 + 6 + 5 + 12), у каждого `passed: true`. Проверено `jq`, а не глазами.
+(6 + 8 + 5 + 12: `errors`, `latency`, `oomkill`, `readiness` в порядке таблицы), у каждого
+`passed: true`. Проверено `jq`, а не глазами.
 
 | Дрилл | Что инъецировали | Время реакции | Восстановление | Уведомление в приёмнике |
 |---|---|---|---|---|
@@ -71,7 +78,9 @@
 
 Список ведётся явно, чтобы «написано в коде» не путалось с «проверено на стенде»:
 
-- доставка `page` в почтовый ящик и `ticket` в `/timeline` по новому маршруту (e-mail-ветка);
+- доставка `page` в почтовый ящик и `ticket` в `/timeline` по маршруту v1.1: ветки `email`
+  в конфиге ещё нет — `deploy/monitoring/alertmanagerconfig.yaml` описывает один receiver
+  `alert-sink` без матчеров, маршрут по `severity` появляется в Phase 3 плана v1.1;
 - heartbeat пути уведомлений (правила `AlertSinkHeartbeatMissing`, `AlertSinkNeverReceived`);
 - правило Loki ruler `DemoApi5xxFromLogs`: `firing` в дрилле `errors` и молчание в `latency`;
 - `stage.drop` Alloy: отсутствие `entry too far behind` после рестарта и рост счётчика

@@ -1,15 +1,18 @@
 # Runbook — k8s-observability-lab
 
 Процедуры для лабы: как поставить инструменты, доставить демо-контур в k3s и что делать,
-если что-то не отвечает. Правила и архитектура — в `AGENTS.md`, история — в `CHANGELOG.md`.
+если что-то не отвечает. Правила и архитектура проекта и история решений ведутся в
+рабочих документах (`AGENTS.md`, `CHANGELOG.md`) — они в публикуемый набор не входят;
+здесь только процедуры и проверки.
 
-Агент работает вне кластера: kubeconfig и SSH-ключи лабы лежат **вне репозитория** и в
-него не попадают. Скрипты берут их из env:
+Доступ к кластеру и к нодам — файлы в каталоге `.secrets/` рядом с проектом. Каталог
+в `.gitignore`: ни kubeconfig, ни ssh-конфиг в git не попадают, и в публикуемом наборе
+их нет. Скрипты берут пути из env, а при пустой переменной — из этого каталога:
 
 | Переменная | Назначение | Значение по умолчанию |
 |---|---|---|
-| `KUBECONFIG` | доступ к кластеру k3s | вне репозитория; при отсутствии скрипт ищет файл рядом с проектом |
-| `LAB_SSH_CONFIG` | SSH к нодам для импорта образов | вне репозитория; при отсутствии — тот же каталог |
+| `KUBECONFIG` | доступ к кластеру k3s | `.secrets/kubeconfig` |
+| `LAB_SSH_CONFIG` | SSH к нодам для импорта образов | `.secrets/ssh_config` |
 | `IMAGE_TAG` | тег образов | короткий git SHA |
 | `WAIT_TARGETS` | сколько секунд `deploy.sh` ждёт цели в Prometheus | `180` |
 
@@ -34,6 +37,12 @@
   и `deploy/base/kustomization.yaml` тогда задаются иначе.
 - **Число нод.** Правила и фильтр Alloy рассчитаны на «одна реплика Alloy на ноду»;
   одна нода тоже работает (тогда `up{job="alloy"}` — одна серия).
+- **Доступ к кластеру.** Положи свой kubeconfig в `.secrets/kubeconfig`, а ssh-конфиг —
+  в `.secrets/ssh_config` (каталог в `.gitignore`, режим `600`); либо задай `KUBECONFIG`
+  и `LAB_SSH_CONFIG` на файлы в любом другом месте. Это **копии**: при смене доступа
+  (перевыпуск сертификата кластера, другие ноды) их надо обновить — устаревший
+  kubeconfig даёт `кластер не отвечает` или `Unauthorized`, а не ошибку скрипта.
+  SSH-ключи в проекте не лежат: `ssh_config` ссылается на них по пути вне репозитория.
 
 ## 1. Инструменты (один раз на машине и в CI)
 
@@ -143,6 +152,25 @@ containerd пишет на диск десятки секунд, API starve-ит
 ./scripts/rollback.sh        # спросит подтверждение
 ./scripts/rollback.sh --yes  # без вопроса
 ```
+
+### Приёмка после деплоя
+
+Что `deploy.sh` проверяет сам: `up == 1` у двух эндпоинтов `demo-api`, у `demo-load` и
+`alert-sink`; живой ok-трафик; загрузку всех групп правил проекта; что сторож
+`SloAlertRulesAbsent` не горит ложно (селектор находит 2 группы) и что серии `slo:*`
+пишутся. Остальное проверяется временем — через 10 минут после apply:
+
+```bash
+# ничего не загорелось зря: 0 горящих ALERTS, кроме Watchdog
+kubectl -n monitoring port-forward svc/monitoring-kube-prometheus-prometheus 9090:9090 &
+curl -sG http://127.0.0.1:9090/api/v1/query \
+  --data-urlencode 'query=count(ALERTS{alertstate="firing",alertname!="Watchdog"}) or vector(0)' \
+  | jq -r '.data.result[0].value[1]'
+# ожидается 0; если не 0 — смотри, какая группа и какой lastError ниже
+```
+
+`Watchdog` в счёт не входит: он всегда `firing` по определению, и его наличие —
+признак живого пути уведомлений, а не сбоя.
 
 ## 4. Где смотреть метрики и логи
 
@@ -273,12 +301,11 @@ kubectl -n monitoring port-forward svc/loki 3100:3100
   (`persistentVolumeClaimRetentionPolicy.whenDeleted: Delete`).
 - Политика удаления тома различает «удалить релиз» и «остановить компонент»:
   `whenDeleted: Delete` (destroy убирает том — контракт отката), `whenScaled: Retain`
-  (масштабирование в 0 том **не** удаляет). Второе — цена ошибки: дефолт чарта
-  `whenScaled: Delete`, и 2026-11-07 дрилл `kubectl -n monitoring scale sts loki
-  --replicas=0` удалил `storage-loki-0` вместе с ~2 сутками логов. Если проверяешь
-  алерт на «компонент пропал», предпочитай удалить под (StatefulSet пересоздаст) или
-  снять `ServiceMonitor`, а не масштабировать STS; политика проверяется в
-  `./scripts/check.sh`.
+  (масштабирование в 0 том **не** удаляет). Дефолт чарта — `whenScaled: Delete`: при
+  нём `scale sts loki --replicas=0` стирает PVC вместе с логами, а не «останавливает
+  компонент». Если проверяешь алерт на «компонент пропал», предпочитай удалить под
+  (StatefulSet пересоздаст) или снять `ServiceMonitor`, а не масштабировать STS;
+  политика проверяется в `./scripts/check.sh`.
 - Образы запинены тегами в `helm/values/loki.yaml` (`loki.image.tag`) и
   `helm/values/alloy.yaml` (`alloy.image.tag`): в лабе нет registry, и обновление до
   нового тега = правка values + `IMPORT_IMAGES="<образ>" ./scripts/import-image.sh`,
@@ -379,7 +406,7 @@ curl -s http://127.0.0.1:9090/api/v1/rules | jq '.data.groups[] | select(.name|s
   `demo-slo-alerts` не загрузилась или падает: смотри `/api/v1/rules` и `lastError`,
   метку `release=monitoring` у PrometheusRule `demo-slo-alerts`. `scripts/deploy.sh`
   проверяет тот же селектор сразу после apply, чтобы неверный формат метки не дал
-  ложный page (отдельно «ALERTS пусто через 10 минут» — приёмка ниже).
+  ложный page (проверка через 10 минут после apply — раздел «Приёмка после деплоя»).
 - Своих инфраструктурных правил десять: `KubePodOOMKilled`, `PVCNearlyFull` (>85 %
   занято, без прогноза роста) и `NodeMemoryAvailableLow` (<15 % свободной памяти узла)
   в `rules/infra.yaml` плюс семь правил пайплайна логов в `rules/pipeline.yaml`
@@ -474,7 +501,7 @@ kubectl -n demo get endpointslices -l kubernetes.io/service-name=demo-api \
 | `kubectl top` пусто | нет metrics-server | для headroom смотреть `kubectl describe node` (Allocated resources) |
 | `loki-0` или `alloy` в `ImagePullBackOff` | нода не скачала образ из docker.io (таймаут CloudFront) | `IMPORT_IMAGES="<образ>" ./scripts/import-image.sh`: tar кладётся на ноду и импортируется локально |
 | `loki-0` `Pending` с пустым PVC | `local-path` провижинит том только после планирования пода | `kubectl -n monitoring describe pvc storage-loki-0` — событие `WaitForFirstConsumer`; если `Provisioning` нет, смотреть под `local-path-provisioner` в `kube-system` |
-| в Alloy `entry too far behind, dropping data` | новый tailer перечитывает логи контейнера с начала, Loki отбрасывает записи старше уже принятых | это шум после рестарта Alloy, дублей в Loki нет; лечится томом под `/tmp/alloy` (не сделано в v1.0) |
+| в Alloy `entry too far behind, dropping data` | новый tailer перечитывает логи контейнера с начала, Loki отбрасывает записи старше уже принятых | это шум после рестарта Alloy, дублей в Loki нет; позиции и так лежат в `emptyDir /tmp/alloy`, поэтому томом это не лечится — источник шума снимается отбрасыванием старых строк на стороне Alloy (`stage.drop`, фаза 6 плана v1.1) |
 | дашборда/панели логов нет в Grafana | datasource `loki` не подхвачен sidecar | `kubectl -n monitoring logs deploy/monitoring-grafana -c grafana-sc-datasources \| tail`, `GET /api/datasources` — должен быть `loki` |
 | Loki отвечает 400 на push | `limits_config` (например, отбрасывание старых записей) или `schemaConfig` не совпадает с хранилищем | `kubectl -n monitoring port-forward svc/loki 3100:3100`, затем `GET /config`, логи `loki-0` |
 | Grafana `Init:ImagePullBackOff` на `init-chown-data` | чарт добавил init-контейнер `busybox:1.38.0` (chown PVC), а в registry лабы его нет | `IMPORT_IMAGES="busybox:1.38.0" ./scripts/import-image.sh` |

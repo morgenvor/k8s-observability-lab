@@ -9,8 +9,9 @@ Pet-проект про эксплуатацию: SLI/SLO с burn-rate алер�
 
 - **SLO считаются по тому, что видит клиент**, а не по метрикам сервера: нагрузка идёт
   через toxiproxy, клиент меряет исход и латентность, Prometheus пишет SLI и burn rate;
-- **алерт доходит до человека** по маршруту с явным разбиением по `severity` (e-mail для
-  `page`/`critical`, вебхук-приёмник для остального) — и путь уведомлений сам под наблюдением;
+- **алерт доходит до человека**: вебхук-приёмник хранит `/timeline` доставленных
+  уведомлений, а целевой маршрут v1.1 делит поток по `severity` (e-mail для
+  `page`/`critical`, приёмник для остального) — и путь уведомлений сам под наблюдением;
 - **логи — рабочий инструмент, а не галочка**: Loki + Alloy с фильтром по ноде, панель
   логов в дашборде и алерт на пайплайн логов;
 - **дриллы с доказательствами**: `evidence/*.json` со схемой `drill-evidence/v1` содержат
@@ -42,11 +43,16 @@ flowchart TD
   severity -->|"catch-all: всё, что не совпало"| sink
 ```
 
-Почему нужен явный catch-all: у наших правил `severity ∈ {page, ticket, info}`, у правил
-чарта — `critical`/`warning`, у `Watchdog` — `none`. Маршрут без явной ветки-страховки
-отправил бы несовпавший алерт в `null`-приёмник, и он исчез бы молча. Состояние
-маршрута и доставки подтверждается `/timeline` приёмника и метрикой `alertsink_*`;
-подробности — `docs/verification.md`.
+Схема показывает **целевой** маршрут v1.1. В текущем конфиге
+(`deploy/monitoring/alertmanagerconfig.yaml`) маршрут один, без матчеров: всё уходит в
+`alert-sink`, e-mail-ветки ещё нет — она приезжает в Phase 3 плана v1.1. Доставка
+webhook подтверждена живьём (`/timeline`, метрика `alertsink_*`), доставка письма —
+нет; это записано в `docs/verification.md`.
+
+Почему ветка `email` пойдёт рядом с явным catch-all: у наших правил `severity ∈
+{page, ticket, info}`, у правил чарта — `critical`/`warning`, у `Watchdog` — `none`.
+Маршрут без явной ветки-страховки отправил бы несовпавший алерт в `null`-приёмник, и он
+исчез бы молча.
 
 ## Состав и версии
 
@@ -64,15 +70,16 @@ flowchart TD
 | toxiproxy | 2.9.0 | `deploy/base/toxiproxy.yaml` |
 | demo-api, demo-load, alert-sink | node:22.23.4-alpine, тег = короткий SHA | `app/*/Dockerfile` |
 
-Своё: 19 правил в 5 `PrometheusRule` (9 групп), два дашборда (`demo-red`, `slo-demo`),
-четыре дрилла, офлайн-ворота `./scripts/check.sh` (их же запускает CI).
+Своё: 19 алертов и 20 записывающих правил (39 правил) в 5 `PrometheusRule` (9 групп),
+два дашборда (`demo-red`, `slo-demo`), четыре дрилла, офлайн-ворота `./scripts/check.sh`
+(их же запускает CI).
 
 ## Быстрый старт
 
 ```bash
 ./scripts/bootstrap-tools.sh     # helm, helmfile, kubectl, kubeconform, promtool, helm-diff в .tools/
 ./scripts/check.sh               # офлайн-проверки: линтеры, тесты, рендер, promtool, скан секретов
-export KUBECONFIG=/путь/к/своему/kubeconfig
+export KUBECONFIG=/путь/к/своему/kubeconfig   # или .secrets/kubeconfig рядом с проектом
 ./scripts/build-image.sh         # образы приложений с тегом = короткий SHA
 ./scripts/import-image.sh        # импорт в containerd каждой ноды (registry в лабе нет)
 ./scripts/deploy.sh              # демо-контур, правила, дашборды, маршрут уведомлений
