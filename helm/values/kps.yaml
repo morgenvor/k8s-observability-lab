@@ -1,6 +1,6 @@
-# Values kube-prometheus-stack для лабы (окно Boutique 2026-10-28).
-# 2026-11-03: перенесён из proxmox-lab/k8s/monitoring/values-kps-small.yaml
-# (каталог лабы удалён); retention 24h→72h, Boutique удалён.
+# Values kube-prometheus-stack для лабы.
+# 2026-11-03: перенесён в проект из каталога лабы (там удалён); retention 24h→72h,
+# демо-магазин (Boutique) из values удалён.
 # Состав ПОЛНЫЙ (prometheus+grafana+alertmanager — ничего не выключаем upfront),
 # ужаты только retention/storage/интервалы/ресурсы. Пин чарта: 92.14.1.
 # Исключение 2026-11-04: выключены kube-controller-manager, kube-scheduler и

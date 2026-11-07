@@ -450,10 +450,23 @@ git rev-parse --is-inside-work-tree >/dev/null 2>&1 \
 mapfile -d '' -t SCAN_FILES < <(git ls-files -z --cached --others --exclude-standard)
 [ "${#SCAN_FILES[@]}" -gt 0 ] \
   || die "git не видит файлов для скана — проверь репозиторий и .git/info/exclude"
+# .secrets/ (kubeconfig и ssh-конфиг лабы) обязан быть вне индекса. Скан ниже поймал
+# бы ключи и адреса и так, но причина другая — «файл попал в индекс», а не «утечка»,
+# и сообщение об этом должно называть настоящий шаг исправления.
+SECRETS_TRACKED="$(git ls-files --cached -- '.secrets' || true)"
+[ -z "${SECRETS_TRACKED}" ] \
+  || die ".secrets/ попал в индекс git (${SECRETS_TRACKED}); убери: git rm --cached -r .secrets"
+git check-ignore -q '.secrets/kubeconfig' \
+  || die ".secrets/ не исключён .gitignore — любой git add . утащит kubeconfig в публикуемый набор"
 SCAN_OUT=".tmp/scan.out"
 scan_rc=0
+# Что ловим: приватные сети стенда и pod CIDR, приватные ключи и токены, имена нод
+# лабы и следы лаборатории/рабочей станции в тексте. Шаблоны 10.x не обобщаем: широкий
+# регэксп начал бы падать на номерах версий в чужих values. Часть слов набрана с
+# классом символов (prox[m]ox, par[r]ot) и без цифр в комментариях: иначе скан находит
+# сам себя в этом файле.
 grep -nIE \
-  '192\.168\.252\.|BEGIN [A-Z ]*PRIVATE KEY|ghp_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|xox[abprs]-|AKIA[0-9A-Z]{16}|k8s[-]server|k8s[-]agent' \
+  '192\.168\.|10\.42\.|BEGIN [A-Z ]*PRIVATE KEY|ghp_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|xox[abprs]-|AKIA[0-9A-Z]{16}|k8s[-]server|k8s[-]agent|prox[m]ox|par[r]ot|VM 10[12]' \
   -- "${SCAN_FILES[@]}" >"${SCAN_OUT}" 2>&1 || scan_rc=$?
 case "${scan_rc}" in
   0)

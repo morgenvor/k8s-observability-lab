@@ -65,7 +65,8 @@ print(total)
 PY
 }
 
-# KUBECONFIG: из env, иначе дефолт лабы (файл вне репозитория).
+# KUBECONFIG: из env, иначе .secrets/kubeconfig рядом с проектом (каталог в
+# .gitignore: в git он не попадает, копий в репозитории нет).
 # Возвращает путь в stdout; при отсутствии — ошибка с понятным следующим шагом.
 default_kubeconfig() {
   if [ -n "${KUBECONFIG:-}" ]; then
@@ -73,12 +74,12 @@ default_kubeconfig() {
     printf '%s\n' "${KUBECONFIG}"
     return 0
   fi
-  local fallback="${PROJECT_ROOT}/../proxmox-lab/.secrets/kubeconfig-phase5b"
+  local fallback="${PROJECT_ROOT}/.secrets/kubeconfig"
   if [ -f "${fallback}" ]; then
-    printf '%s\n' "$(cd "$(dirname "${fallback}")" && pwd)/$(basename "${fallback}")"
+    printf '%s\n' "${fallback}"
     return 0
   fi
-  die "нет kubeconfig: задай KUBECONFIG или положи его в ../proxmox-lab/.secrets/ (кластер живёт в лабе; если VM 101/102 остановлены — их старт это действие владельца)"
+  die "нет kubeconfig: задай KUBECONFIG или положи файл в .secrets/kubeconfig (каталог вне git; см. docs/runbook.md, «Как адаптировать»)"
 }
 
 # Рендер демо-контура с тегами образов в .tmp: трекаемый kustomization.yaml не меняется.
@@ -118,5 +119,5 @@ require_cluster() {
   export KUBECONFIG="${kc}"
   require_tools kubectl
   kubectl get nodes --request-timeout=10s >/dev/null 2>&1 \
-    || die "кластер не отвечает (KUBECONFIG=${KUBECONFIG}); проверь, что VM 101/102 запущены в лабе"
+    || die "кластер не отвечает (KUBECONFIG=${KUBECONFIG}); проверь, что машины стенда запущены"
 }

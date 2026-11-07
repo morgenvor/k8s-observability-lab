@@ -22,17 +22,21 @@
 ## Запуск
 
 ```bash
-export KUBECONFIG=../proxmox-lab/.secrets/kubeconfig-phase5b   # кластер лабы
 ./scripts/bootstrap-tools.sh        # один раз: kubectl в .tools/bin
 ./drills/run.sh errors             # один дрилл
 ./drills/run.sh all                # все четыре подряд (около 1 ч 15 мин)
 ```
 
+Доступ к кластеру скрипты берут из `$KUBECONFIG`, а если переменная не задана — из
+файла `.secrets/kubeconfig` рядом с проектом (каталог в `.gitignore`, в git не
+попадает). Свой кластер: положи kubeconfig туда или задай `KUBECONFIG`. SSH-конфиг для
+импорта образов — `.secrets/ssh_config` или `$LAB_SSH_CONFIG`.
+
 Дрилл меняет живой стенд: трафик `demo` деградирует, под `demo-api` перезапускается.
 Поэтому это действие с согласия владельца лабы (правило проекта: живые операции — с
-согласия и записью в `../proxmox-lab/CHANGELOG.md`). Дриллы работают только в
-namespace `demo`: в `monitoring` они лишь читают Prometheus API через порт-форвард,
-ничего не изменяя.
+согласия и записью в CHANGELOG стенда; он живёт вне этого репозитория). Дриллы
+работают только в namespace `demo`: в `monitoring` они лишь читают Prometheus API через
+порт-форвард, ничего не изменяя.
 
 Повторный прогон не затирает доказательства: если файл `evidence/<дата>-<дрилл>.json`
 за этот день уже есть, он вместе с транскриптом уезжает в `evidence/attempts/` с
@@ -198,7 +202,7 @@ cleanup не мешает остальным шагам и записи JSON. Р
 | Симптом | Причина | Что делать |
 |---|---|---|
 | `toxiproxy API не отвечает` в preflight | под `toxiproxy` не Ready или порт-форвард не поднялся | `kubectl -n demo get pods,svc`, `kubectl -n demo logs deploy/toxiproxy` |
-| `кластер не отвечает` | VM лабы остановлены | запуск VM — действие владельца (`../proxmox-lab/`), дрилл повторить |
+| `кластер не отвечает` | машины стенда остановлены | запуск машин — действие владельца стенда, затем повторить дрилл |
 | алерт не пришёл за отведённое время | `AlertmanagerConfig` не подхвачен, `alertmanagerConfigMatcherStrategy` не `None`, sink в `CrashLoop` | сгенерированный конфиг Alertmanager, `kubectl -n demo logs deploy/alert-sink`, `/timeline` |
 | алерт в Prometheus `firing`, в `/timeline` нет | маршрут или доставка | `alertsink_notifications_total`, лог Alertmanager, `kubectl -n monitoring get alertmanagerconfig` |
 | `порт-форвард … не поднялся` | занят локальный порт или обрыв соединения | освободить порт (`DRILL_PROM_PORT`, `DRILL_SINK_PORT`, `DRILL_TOXI_PORT`) |

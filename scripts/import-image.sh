@@ -2,7 +2,7 @@
 # Импорт собранных образов в containerd обеих нод k3s (registry в лабе нет).
 # Важно: импорт нужен на КАЖДОЙ ноде, иначе под на второй ноде уйдёт в ImagePullBackOff.
 # Использование: ./scripts/import-image.sh
-# Env: IMAGE_TAG (иначе короткий git SHA), LAB_SSH_CONFIG (иначе ../proxmox-lab/.secrets/ssh_config),
+# Env: IMAGE_TAG (иначе короткий git SHA), LAB_SSH_CONFIG (иначе .secrets/ssh_config),
 #      IMPORT_IMAGES="img:tag img2:tag" — импортировать эти образы вместо app/* (например Loki/Alloy:
 #      ноды лабы не всегда успевают скачать их из docker.io, см. CHANGELOG фазы 5)
 set -euo pipefail
@@ -21,8 +21,8 @@ if [ -z "${IMPORT_IMAGES:-}" ]; then
   TAG="${IMAGE_TAG:-$(git rev-parse --short HEAD 2>/dev/null)}"
   [ -n "${TAG}" ] || die "не удалось определить тег: нет git-репозитория? задай IMAGE_TAG"
 fi
-SSH_CONFIG="${LAB_SSH_CONFIG:-${PROJECT_ROOT}/../proxmox-lab/.secrets/ssh_config}"
-[ -f "${SSH_CONFIG}" ] || die "нет ssh-конфига лабы: ${SSH_CONFIG} (задай LAB_SSH_CONFIG; ключи и адреса живут вне репозитория)"
+SSH_CONFIG="${LAB_SSH_CONFIG:-${PROJECT_ROOT}/.secrets/ssh_config}"
+[ -f "${SSH_CONFIG}" ] || die "нет ssh-конфига: ${SSH_CONFIG} (задай LAB_SSH_CONFIG или положи файл в .secrets/ssh_config; каталог вне git, адреса и ключи в репозиторий не попадают)"
 
 # BatchMode: в неинтерактивном прогоне ssh не должен ждать пароль/пассфразу.
 # Массив, а не строка: shellcheck -S warning ругается на неквотированное раскрытие.
@@ -94,7 +94,7 @@ for node in "${NODES[@]}"; do
   if ! import_to_node "${node}"; then
     # Первый импорт нового образа даёт пик записи на диск, и на control-plane от него
     # перезапускается k3s (embedded etcd теряет лидерство — факт лабы 2026-11-03,
-    # `../proxmox-lab/CHANGELOG.md`). Это не ошибка ssh/прав: ждём, пока поднимется
+    # записан в CHANGELOG лабы). Это не ошибка ssh/прав: ждём, пока поднимется
     # и API, и containerd ноды (одного API мало — `ctr` в этот момент отвечает
     # «connection refused», так и провалилась первая попытка на control-plane в фазе 5),
     # и повторяем один раз. Повтор дешевле только для стрима (блобы уже в content
