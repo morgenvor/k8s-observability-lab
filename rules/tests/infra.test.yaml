@@ -1,6 +1,7 @@
 # Юнит-тесты инфраструктурных алертов (promtool test rules).
 #
-# Проверяются только правила проекта: KubePodOOMKilled и NodeMemoryAvailableLow.
+# Проверяются только правила проекта: KubePodOOMKilled, PVCNearlyFull и
+# NodeMemoryAvailableLow.
 # Остальная инфраструктура делегирована чарту kube-prometheus-stack (перечень —
 # в шапке rules/infra.yaml); тестировать здесь правила чарта смысла нет.
 #

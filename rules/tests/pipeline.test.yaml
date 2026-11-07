@@ -105,6 +105,60 @@ tests:
         alertname: LokiNotIngesting
         exp_alerts: []
 
+  # --- Alloy: цель есть, скрейп не удаётся ----------------------------------
+  # Пара правил устроена так же, как у Loki: up == 0 ловит сломанный скрейп,
+  # absent() — отсутствие цели. Тесты фиксируют, что они не срабатывают парой.
+  - name: "Alloy отвечает ошибкой: AlloyDown горит, AlloyTargetMissing молчит"
+    interval: 1m
+    input_series:
+      - series: 'up{job="alloy", namespace="monitoring"}'
+        values: '0x20'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: AlloyDown
+        exp_alerts:
+          - exp_labels:
+              job: alloy
+              namespace: monitoring
+              service: alloy
+              severity: ticket
+            exp_annotations:
+              summary: "Alloy: реплика не отдаёт метрики"
+              description: >-
+                Одна из реплик DaemonSet alloy не скрейпится дольше 5 минут: логи
+                подов этой ноды не собираются. Проверь под на нужной ноде, его логи и
+                статус DaemonSet.
+              runbook_url: "docs/runbook.md"
+      - eval_time: 10m
+        alertname: AlloyTargetMissing
+        exp_alerts: []
+
+  # --- Alloy: цели нет вовсе -----------------------------------------------
+  - name: "цели Alloy нет вовсе: AlloyTargetMissing горит, AlloyDown молчит"
+    interval: 1m
+    input_series:
+      - series: 'up{job="monitoring/loki", namespace="monitoring"}'
+        values: '1x20'
+    alert_rule_test:
+      - eval_time: 15m
+        alertname: AlloyTargetMissing
+        exp_alerts:
+          - exp_labels:
+              job: alloy
+              namespace: monitoring
+              service: alloy
+              severity: ticket
+            exp_annotations:
+              summary: "Alloy: целей скрейпа нет вовсе"
+              description: >-
+                Серии up{job="alloy"} нет 10 минут: удалён DaemonSet или Service,
+                выключен ServiceMonitor, либо у сервиса нет эндпоинтов. Сбор логов
+                при этом стоит полностью, а не частично.
+              runbook_url: "docs/runbook.md"
+      - eval_time: 15m
+        alertname: AlloyDown
+        exp_alerts: []
+
   # --- Alloy: покрытие нод -------------------------------------------------
   - name: "Alloy на двух нодах из двух: AlloyCoverageIncomplete молчит"
     interval: 1m
