@@ -64,7 +64,7 @@ spec:
               фактического потребления. Если сейчас идёт дрилл OOMKilled —
               ожидаемо; иначе проверь limits пода и график рабочего набора,
               а не только факт рестарта.
-            runbook_url: "docs/drills.md"
+            runbook_url: "https://github.com/morgenvor/k8s-observability-lab/blob/main/docs/runbook.md#инфраструктурные-алерты"
         # Защита от нулевой ёмкости (`capacity > 0`) обязательна: used/0 даёт +Inf и
         # вечный алерт на «пустом» PVC. Фильтр job="kubelet" — чтобы один PVC не
         # приезжал дважды (через kubelet и через apiserver).
@@ -82,7 +82,7 @@ spec:
               Для Prometheus на PVC это риск уйти в read-only и потерять данные
               retention; рост обычно даёт кардинальность метрик. Порог намеренно
               без прогноза роста — «заполнилось и стабилизировалось» тоже опасно.
-            runbook_url: "docs/runbook.md"
+            runbook_url: "https://github.com/morgenvor/k8s-observability-lab/blob/main/docs/runbook.md#инфраструктурные-алерты"
 
     - name: demo-infra.nodes
       rules:
@@ -102,4 +102,4 @@ spec:
               Для лабы это граница headroom: следующая раскатка подов может
               упереться в память. Самый поздний случай (меньше 10 % свободной
               памяти) покрывает правило чарта NodeMemoryHighUtilization.
-            runbook_url: "docs/runbook.md"
+            runbook_url: "https://github.com/morgenvor/k8s-observability-lab/blob/main/docs/runbook.md#инфраструктурные-алерты"

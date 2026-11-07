@@ -543,6 +543,178 @@ kubectl -n demo get endpointslices -l kubernetes.io/service-name=demo-api \
 5. **Действие** — по классу из таблицы `severity` выше и по ссылке `runbook_url` в самом
    уведомлении (если она заполнена).
 
+### SLO доступности: burn rate fast, medium и slow
+
+Три алерта по SLO доступности `demo-api` (99 %): `SloDemoAvailabilityBurnFast`,
+`SloDemoAvailabilityBurnMedium`, `SloDemoAvailabilityBurnSlow`
+(`rules/demo-slo-alerts.yaml`, группа `demo-slo.alerts.availability`). Считаются по
+записанным сериям `slo:demo_availability:burn_rate_*`, а те — по клиентским исходам
+`demo-load` (`outcome="ok"`): «доступность» здесь означает «клиент получил ответ», и
+сетевой обрыв на пути `demo-load → toxiproxy → demo-api` виден так же, как 500 от
+приложения.
+
+| Алерт | Условие | Смысл | `severity` |
+|---|---|---|---|
+| Fast | burn 14,4x одновременно в 5m и 1h, `for: 2m` | отказ идёт прямо сейчас: за час такого темпа уходит ~20 % трёхдневного бюджета | page |
+| Medium | burn 6x в 30m и 6h, `for: 15m` | устойчивая деградация: за 6 часов уходит ~50 % бюджета | ticket |
+| Slow | burn 1x за 3d, `for: 1h` | бюджет сгорает к концу окна SLO без резкого всплеска | ticket |
+
+Что смотреть и в каком порядке:
+
+1. `demo-slo` — какой бюджет и какое окно горит: остаток бюджета, `burn_rate_*` по
+   окнам, текущий SLI за 3 дня.
+2. `demo-red` — что видят клиенты: RPS, доля ошибок (`клиент/сервер`), p95. Панель
+   «Логи (Loki)» того же дашборда отвечает на «почему» (статусы, `request_id`), но не
+   на «насколько плохо»: доля потерь на пути до клиента есть только в метриках.
+3. `kubectl -n demo get pods -o wide` и `kubectl -n demo port-forward svc/toxiproxy
+   8474:8474` → `GET /proxies`: toxiproxy включён/задержан, под `demo-api` не
+   `Ready`, реплик меньше двух. Отдельно проверь, не идёт ли дрилл (`evidence/`).
+4. Если инъекции нет — смотри `kubectl -n demo logs deploy/demo-api --tail=100` и
+   `kubectl -n demo describe pod`: падение подов, OOM, сломанная проба.
+
+Fast требует реакции в минутах: сначала восстанови путь (снять токсин, вернуть
+реплики), потом разбирайся в причине — бюджет уже тратится. Medium и Slow — тикет:
+разбор плановый, но с записью, какой маршрут/клиент съедает бюджет (у `demo-api`
+маршруты заданы меткой `route` в `http_requests_total`). Сценарии инъекций —
+`docs/drills.md` (`errors`, `readiness`).
+
+### SLO латентности: burn rate fast, medium и slow
+
+Три алерта по SLO латентности `demo-api` (95 % запросов ≤ 300 мс):
+`SloDemoLatencyBurnFast|Medium|Slow` (`rules/demo-slo-alerts.yaml`, группа
+`demo-slo.alerts.latency`). Метрика — клиентская гистограмма
+`load_request_duration_seconds` с бакетом `0.3`, то есть задержка, которую видит
+потребитель, включая путь через toxiproxy.
+
+| Алерт | Условие | Смысл | `severity` |
+|---|---|---|---|
+| Fast | 14,4x в 5m и **30m**, `for: 2m` | медленных запросов столько, что за полчаса уходит ~10 % бюджета | page |
+| Medium | 6x в 30m и 6h, `for: 15m` | за 6 часов уходит ~50 % бюджета | ticket |
+| Slow | 1x за 3d, `for: 1h` | бюджет 5 % сгорает к концу окна SLO | ticket |
+
+Почему у fast длинное окно 30m, а не 1h: при пороге 14,4x и бюджете 5 % условие с
+окном 1h выполняется только на 43-й минуте полного замедления. Разбор — в комментарии
+к `rules/demo-slo-alerts.yaml`.
+
+Порядок разбора тот же, что у доступности, с поправкой на предмет:
+
+1. `demo-slo` — доля запросов ≤ 300 мс и burn rate по окнам `5m`/`30m`/`6h`/`3d`.
+2. `demo-red` — p95 по обеим гистограммам: если медленно только на клиенте, дело в
+   пути (`toxiproxy`), а не в приложении.
+3. `GET /proxies` у toxiproxy — включён ли токсин `latency` (дрилл `latency` добавляет
+   задержку на прокси, а не в коде).
+4. Если путь чист — ищи медленные маршруты: `histogram_quantile(0.95,
+   sum by (route) (rate(http_request_duration_seconds_bucket[5m])))` и логи с большим
+   `duration_ms`.
+
+Латентностный бюджет уже потрачен к моменту page: чинить «прямо сейчас» — снять
+задержку/перезапустить под, а не оптимизировать код.
+
+### Инфраструктурные алерты
+
+Три собственных правила (`rules/infra.yaml`), остальная инфраструктура — от чарта
+kube-prometheus-stack.
+
+- `KubePodOOMKilled` (ticket) — `kube_pod_container_status_last_terminated_reason
+  {reason="OOMKilled"} == 1`: последнее завершение контейнера — OOM.
+  `kubectl -n <ns> describe pod <pod>` → `Last State: Terminated, Reason: OOMKilled`,
+  `kubectl -n <ns> get deploy <deploy> -o jsonpath='{.spec.template.spec.containers[*].resources}'`
+  — сравнить `limits.memory` с рабочим набором. Метрика KSM отражает **последнее**
+  завершение, поэтому алерт висит и после восстановления, пока контейнер не
+  завершится по другой причине: смотри время последнего рестарта, а не только факт.
+  На стенде это же состояние даёт дрилл `oomkill` (`docs/drills.md`).
+- `PVCNearlyFull` (ticket) — `kubelet_volume_stats_used_bytes / capacity > 0.85`
+  дольше 15 минут. `kubectl -n monitoring get pvc` → какой том,
+  `kubectl -n monitoring describe pvc <имя>` → событие и нода. У `local-path`
+  расширение существующего тома не работает: либо чистка (retention, старые
+  WAL/блоки), либо новый PVC. Для тома Prometheus рост обычно даёт кардинальность
+  метрик, для Loki — срок хранения логов.
+- `NodeMemoryAvailableLow` (ticket) — `node_memory_MemAvailable_bytes / MemTotal < 0.15`
+  дольше 10 минут. `kubectl describe node <нода>` → секция `Allocated resources`
+  (`kubectl top` в лабе пуст: metrics-server не ставится). Это граница headroom:
+  следующая раскатка может упереться в память. Более поздний случай (<10 %) ловит
+  правило чарта `NodeMemoryHighUtilization`.
+
+### Сторожа правил и SLO (meta)
+
+Три сторожа в `rules/meta.yaml`, все про качество самого мониторинга, а не про
+пользователя:
+
+- `SloRulesAbsent` (page) — `absent(slo:demo_availability:ratio_5m)` или
+  `absent(slo:demo_latency:ratio_5m)`. Записанных серий нет → burn-rate алерты по SLO
+  молчат, и тишина выглядит как здоровый сервис. Проверь:
+  `kubectl -n monitoring get prometheusrule | grep demo-` (метка `release=monitoring`),
+  `curl -s http://127.0.0.1:9090/api/v1/rules | jq '.data.groups[] | select(.name|startswith("demo-")) | {name, lastError}'`,
+  логи `config-reloader` в поде Prometheus.
+- `SloAlertRulesAbsent` (page) — нет групп `demo-slo.alerts.availability` или
+  `demo-slo.alerts.latency` в метрике `prometheus_rule_group_rules`: записанные `slo:*`
+  живы, а страниц нет. Первый шаг — тот же `/api/v1/rules`; селектор по `rule_group`
+  держится на формате `<путь>;<имя группы>` (проверено на стенде), поэтому ищи хвост
+  `;demo-slo.alerts.availability`.
+- `SloDemoNoTraffic` (info) — `demo-load` жив, но 10 минут не отправлял запросов (или
+  цель `demo-load` пропала из Prometheus). Проверь под `demo-load`, его логи,
+  `load_ticks_skipped_total` и конфиг toxiproxy: генератор мог остаться без цели.
+  `info`, а не page: «нет трафика» — не отказ сервиса, а дефект фикстуры.
+
+Подробности про выгрузку правил для `promtool` и про то, почему сторожей два, —
+раздел «Правила Prometheus (фаза 3)».
+
+### Пайплайн логов
+
+Семь правил `rules/pipeline.yaml`: `LokiDown`, `LokiTargetMissing`,
+`LokiNotIngesting`, `AlloyDown`, `AlloyTargetMissing`, `AlloyCoverageIncomplete`,
+`AlloyDroppedLogs`. Ключевое различие: `*Down` — цель есть, но `/metrics` не отвечает
+(`up == 0`); `*TargetMissing` — цели нет вовсе (`absent(up)`), то есть удалён
+объект/`ServiceMonitor` или у Service нет эндпоинтов.
+
+- `LokiDown`/`LokiTargetMissing` (ticket): `kubectl -n monitoring get sts loki`,
+  `get endpoints loki`, `kubectl -n monitoring logs loki-0 --tail=100`,
+  `port-forward svc/loki 3100:3100` → `/ready`, `/config`. Пока Loki стоит, Grafana не
+  читает логи, а Alloy копит ошибки push.
+- `AlloyDown`/`AlloyTargetMissing` (ticket): `kubectl -n monitoring get ds alloy`,
+  `get pods -l app.kubernetes.io/name=alloy -o wide`, логи контейнера `alloy`.
+  Выпавшая реплика = логи этой ноды не собираются.
+- `AlloyCoverageIncomplete` (ticket): живых реплик меньше, чем нод. Причины — под не
+  встал (ресурсы, taint), реплика не скрейпится, DaemonSet урезан `nodeSelector`.
+- `AlloyDroppedLogs` (ticket): `loki_write_dropped_entries_total` растёт. Причина в
+  метке `reason` (`queue_is_full` — Loki не успевает, `rate_limited`, `ingester_error`).
+  Это потеря, а не задержка: `sum by (reason) (rate(loki_write_dropped_entries_total[10m]))`.
+- `LokiNotIngesting` (info): distributor 15 минут не принимал строк, и так уже 30
+  минут при живом процессе. Смотри Alloy, push-URL `loki.monitoring.svc:3100` и фильтр
+  `__meta_kubernetes_pod_node_name`; возможно, в `demo`/`monitoring` просто тихо.
+
+Как читать логи и метрики — разделы «Логи: Loki и Alloy» и «Метрики Loki и Alloy».
+
+### Путь уведомлений
+
+Два правила `rules/notifications.yaml` (группа `demo-alerting-path.heartbeat`)
+сторожат сам путь «Alertmanager → sink», потому что правила чарта
+(`AlertmanagerFailedToSendAlerts`, `AlertmanagerClusterFailedToSendAlerts`) видят
+только ошибки отправки, а не полное молчание маршрута:
+
+- `AlertSinkHeartbeatMissing` — `alertsink_last_notification_timestamp_seconds` старше
+  5,5 ч при живом sink. Порог выведен из `repeatInterval: 4h`: `Watchdog` (всегда
+  firing) обязан приходить не реже, чем раз в 4 часа, и 5,5 ч тишины — это уже
+  поломка, а не «ночью никто не алертил».
+- `AlertSinkNeverReceived` — sink живёт дольше 5,5 ч, но
+  `alertsink_last_notification_timestamp_seconds == 0`: не пришло ни одного
+  уведомления, включая `Watchdog`. Значит, сломан маршрут/конфиг Alertmanager,
+  а не доставка конкретного алерта.
+
+Порядок разбора:
+
+1. `curl -s http://127.0.0.1:8080/metrics` (port-forward `svc/alert-sink`) —
+   `alertsink_last_notification_timestamp_seconds`, `alertsink_process_start_time_seconds`.
+2. `/timeline` — пусто или старые записи? Пусто при живом sink → маршрут.
+3. `kubectl -n monitoring get alertmanagerconfig`, затем сгенерированный конфиг:
+   `kubectl -n monitoring get secret alertmanager-monitoring-kube-prometheus-alertmanager-generated -o jsonpath='{.data.alertmanager\.yaml\.gz}' | base64 -d | gunzip | grep -A3 webhook_configs`
+   — catch-all child-route на месте?
+4. `alertmanager_config_last_reload_successful{job="monitoring-kube-prometheus-alertmanager"}`
+   и лог Alertmanager: ошибка конфига останавливает **всю** доставку, включая e-mail.
+5. Состояние самого sink: `up{job="alert-sink"}`, `kubectl -n demo logs deploy/alert-sink`.
+
+Устройство маршрута и проверка доставки — раздел «Маршрут уведомлений и alert-sink».
+
 **Гигиена:** силенсы создаются **в UI Alertmanager** (`alertmanager.lab.internal`), не в
 Prometheus: кнопка «Silence» в UI Prometheus ведёт на pod IP, который из браузера не
 открывается. Силенс должен сопровождаться записью, почему и до какого времени; «заглушить

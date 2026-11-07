@@ -27,7 +27,7 @@ tests:
                 (нет метки release=monitoring?), группа падает на вычислении или
                 оператор ещё не перезагрузил правило. Пока это так, burn-rate
                 алерты по SLO молчат — тишина не означает «всё хорошо».
-              runbook_url: "docs/runbook.md"
+              runbook_url: "https://github.com/morgenvor/k8s-observability-lab/blob/main/docs/runbook.md#сторожа-правил-и-slo-meta"
 
   # SloDemoNoTraffic смотрит не на slo:*, а на сырые метрики нагрузки, поэтому
   # его кейсы моделируются теми же метриками, что и в demo-slo.yaml: up и
@@ -54,7 +54,7 @@ tests:
                 серии slo:* при этом не пустеют: при нулевой скорости они дают NaN или 1,
                 поэтому дашборд выглядит зелёным, хотя оценивать нечего. Проверь под
                 demo-load, его логи и load_ticks_skipped_total, а также конфиг toxiproxy.
-              runbook_url: "docs/runbook.md"
+              runbook_url: "https://github.com/morgenvor/k8s-observability-lab/blob/main/docs/runbook.md#сторожа-правил-и-slo-meta"
 
   - name: "нагрузка идёт: SloDemoNoTraffic молчит"
     interval: 1m
@@ -106,7 +106,7 @@ tests:
                 серии slo:* при этом не пустеют: при нулевой скорости они дают NaN или 1,
                 поэтому дашборд выглядит зелёным, хотя оценивать нечего. Проверь под
                 demo-load, его логи и load_ticks_skipped_total, а также конфиг toxiproxy.
-              runbook_url: "docs/runbook.md"
+              runbook_url: "https://github.com/morgenvor/k8s-observability-lab/blob/main/docs/runbook.md#сторожа-правил-и-slo-meta"
 
   # --- Сторож групп burn-rate алертов ---------------------------------------
   # prometheus_rule_group_rules — метрика Prometheus про загруженные группы:
@@ -149,4 +149,4 @@ tests:
                 выкинул оператор. Записанные серии slo:* при этом живы, поэтому
                 SloRulesAbsent молчит, а страниц по бюджету ошибок нет вовсе — тишина
                 не означает «всё хорошо».
-              runbook_url: "docs/runbook.md"
+              runbook_url: "https://github.com/morgenvor/k8s-observability-lab/blob/main/docs/runbook.md#сторожа-правил-и-slo-meta"

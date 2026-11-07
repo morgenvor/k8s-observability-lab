@@ -51,7 +51,7 @@ spec:
               (нет метки release=monitoring?), группа падает на вычислении или
               оператор ещё не перезагрузил правило. Пока это так, burn-rate
               алерты по SLO молчат — тишина не означает «всё хорошо».
-            runbook_url: "docs/runbook.md"
+            runbook_url: "https://github.com/morgenvor/k8s-observability-lab/blob/main/docs/runbook.md#сторожа-правил-и-slo-meta"
 
         # Второй сторож — со стороны алертов. SloRulesAbsent выше проверяет
         # записанные серии slo:*: если они живы, группы demo-slo.* вычисляются.
@@ -83,7 +83,7 @@ spec:
               выкинул оператор. Записанные серии slo:* при этом живы, поэтому
               SloRulesAbsent молчит, а страниц по бюджету ошибок нет вовсе — тишина
               не означает «всё хорошо».
-            runbook_url: "docs/runbook.md"
+            runbook_url: "https://github.com/morgenvor/k8s-observability-lab/blob/main/docs/runbook.md#сторожа-правил-и-slo-meta"
 
         # Третий сторож с другой стороны. SloRulesAbsent ловит «правил нет», а это
         # правило — «правила есть, а судить не о чем». Нужно потому, что SLI нормируется
@@ -119,4 +119,4 @@ spec:
               серии slo:* при этом не пустеют: при нулевой скорости они дают NaN или 1,
               поэтому дашборд выглядит зелёным, хотя оценивать нечего. Проверь под
               demo-load, его логи и load_ticks_skipped_total, а также конфиг toxiproxy.
-            runbook_url: "docs/runbook.md"
+            runbook_url: "https://github.com/morgenvor/k8s-observability-lab/blob/main/docs/runbook.md#сторожа-правил-и-slo-meta"

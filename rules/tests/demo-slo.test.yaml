@@ -114,8 +114,8 @@ tests:
                 (порог 14,4x в окнах 5m и 1h). При 14,4x за час уходит ~20 %
                 трёхдневного бюджета. Смотри долю не-ok в demo-load и состояние
                 toxiproxy: чаще всего это сетевой сбой или недоступный demo-api.
-              runbook_url: "docs/drills.md"
-              dashboard_url: "/d/demo-slo"
+              runbook_url: "https://github.com/morgenvor/k8s-observability-lab/blob/main/docs/runbook.md#slo-доступности-burn-rate-fast-medium-и-slow"
+              dashboard_url: "http://grafana.lab.internal/d/demo-slo"
       - eval_time: 4335m
         alertname: SloDemoAvailabilityBurnMedium
         exp_alerts: []
@@ -164,8 +164,8 @@ tests:
                 За 3 дня расход бюджета превышает 1x: при таких темпах бюджет 1 %
                 закончится к концу окна SLO. Плановая работа с SLO, не инцидент:
                 посмотри, какие маршруты и клиенты дают не-ok.
-              runbook_url: "docs/drills.md"
-              dashboard_url: "/d/demo-slo"
+              runbook_url: "https://github.com/morgenvor/k8s-observability-lab/blob/main/docs/runbook.md#slo-доступности-burn-rate-fast-medium-и-slow"
+              dashboard_url: "http://grafana.lab.internal/d/demo-slo"
 
   # Латентность: три дня здоровья, затем 80 минут, когда 90 % запросов медленнее
   # 300 мс. Доля ≤ 300 мс падает до 0,1 при бюджете 5 %, то есть burn 18x: fast
@@ -210,8 +210,8 @@ tests:
                 (порог 14,4x в окнах 5m и 30m) при бюджете 5 %. Проверь
                 латентность клиента demo-load и toxiproxy: дрилл latency
                 добавляет задержку на прокси, а не в приложении.
-              runbook_url: "docs/drills.md"
-              dashboard_url: "/d/demo-slo"
+              runbook_url: "https://github.com/morgenvor/k8s-observability-lab/blob/main/docs/runbook.md#slo-латентности-burn-rate-fast-medium-и-slow"
+              dashboard_url: "http://grafana.lab.internal/d/demo-slo"
       - eval_time: 4400m
         alertname: SloDemoLatencyBurnMedium
         exp_alerts: []
@@ -266,8 +266,8 @@ tests:
                 (порог 14,4x в окнах 5m и 30m) при бюджете 5 %. Проверь
                 латентность клиента demo-load и toxiproxy: дрилл latency
                 добавляет задержку на прокси, а не в приложении.
-              runbook_url: "docs/drills.md"
-              dashboard_url: "/d/demo-slo"
+              runbook_url: "https://github.com/morgenvor/k8s-observability-lab/blob/main/docs/runbook.md#slo-латентности-burn-rate-fast-medium-и-slow"
+              dashboard_url: "http://grafana.lab.internal/d/demo-slo"
       - eval_time: 4350m
         alertname: SloDemoLatencyBurnMedium
         exp_alerts: []
@@ -345,8 +345,8 @@ tests:
                 (порог 14,4x в окнах 5m и 1h). При 14,4x за час уходит ~20 %
                 трёхдневного бюджета. Смотри долю не-ok в demo-load и состояние
                 toxiproxy: чаще всего это сетевой сбой или недоступный demo-api.
-              runbook_url: "docs/drills.md"
-              dashboard_url: "/d/demo-slo"
+              runbook_url: "https://github.com/morgenvor/k8s-observability-lab/blob/main/docs/runbook.md#slo-доступности-burn-rate-fast-medium-и-slow"
+              dashboard_url: "http://grafana.lab.internal/d/demo-slo"
 
   # Трафик встал, но счётчики живы (rate = 0). 0/0 даёт NaN: серия существует,
   # поэтому хвостовой `or vector(1)` не срабатывает и SLI показывает NaN, а не 1,0.

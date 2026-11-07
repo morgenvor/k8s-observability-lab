@@ -387,6 +387,100 @@ shopt -u nullglob
   || die "выгрузка не дала ни одного PrometheusRule: в rules/ только служебные файлы?"
 promtool check rules "${RULE_FILES[@]}"
 
+# --- 5a. Ссылки в алертах: абсолютные и с живым анкором ----------------------
+# runbook_url из уведомления открывает браузер по абсолютному адресу, поэтому
+# относительный путь ("docs/runbook.md") — это 404 у получателя. Анкор сверяется
+# со slug заголовков runbook по алгоритму GitHub: переименование подраздела иначе
+# тихо ломает все ссылки, и видно это только в письме. dashboard_url проверяется
+# тем же проходом — по uid существующих дашбордов.
+step "ссылки в алертах: runbook_url и dashboard_url"
+python3 - "${RULEFILES_DIR}" <<'PY'
+import glob
+import json
+import os
+import re
+import sys
+
+import yaml
+
+RUNBOOK = (
+    "https://github.com/morgenvor/k8s-observability-lab/blob/main/docs/runbook.md#"
+)
+DASHBOARD = "http://grafana.lab.internal/d/"
+rulefiles_dir = sys.argv[1]
+
+
+def slug(heading):
+    # Алгоритм GitHub: нижний регистр, пунктуация вырезается, пробелы -> дефис.
+    text = heading.strip().lower()
+    text = re.sub(r"[^\w\- ]", "", text, flags=re.UNICODE)
+    return text.replace(" ", "-")
+
+
+anchors = {}
+with open("docs/runbook.md", encoding="utf-8") as handle:
+    for line in handle:
+        match = re.match(r"#{2,3} +(.+?)\s*$", line)
+        if match:
+            anchors.setdefault(slug(match.group(1)), match.group(1))
+if not anchors:
+    sys.exit("в docs/runbook.md не найдено ни одного заголовка ##/###")
+
+uids = {}
+for path in glob.glob("deploy/dashboards/*.json"):
+    with open(path, encoding="utf-8") as handle:
+        uid = json.load(handle).get("uid")
+    if uid:
+        uids[uid] = path
+if not uids:
+    sys.exit("в deploy/dashboards/*.json нет ни одного uid")
+
+errors = []
+checked = {"runbook": 0, "dashboard": 0}
+for path in sorted(glob.glob(os.path.join(rulefiles_dir, "*.yaml"))):
+    source = os.path.join("rules", os.path.basename(path))
+    with open(path, encoding="utf-8") as handle:
+        doc = yaml.safe_load(handle)
+    for group in (doc or {}).get("groups") or []:
+        for rule in group.get("rules") or []:
+            if "alert" not in rule:
+                continue
+            annotations = rule.get("annotations") or {}
+            where = f"{source}: {rule['alert']}"
+            runbook = annotations.get("runbook_url")
+            if not runbook:
+                errors.append(f"{where}: нет runbook_url — уведомление не ведёт в процедуру")
+            elif not runbook.startswith(RUNBOOK):
+                errors.append(f"{where}: runbook_url не абсолютный или мимо файла: {runbook}")
+            else:
+                anchor = runbook[len(RUNBOOK):]
+                if anchor not in anchors:
+                    errors.append(
+                        f"{where}: анкора #{anchor} нет в docs/runbook.md"
+                        f" (ближайшие заголовки: {', '.join(sorted(anchors)[:8])})"
+                    )
+                checked["runbook"] += 1
+            dashboard = annotations.get("dashboard_url")
+            if dashboard:
+                if not dashboard.startswith(DASHBOARD):
+                    errors.append(f"{where}: dashboard_url не http://grafana.lab.internal/d/<uid>: {dashboard}")
+                elif dashboard[len(DASHBOARD):] not in uids:
+                    errors.append(
+                        f"{where}: uid '{dashboard[len(DASHBOARD):]}' нет в deploy/dashboards/*.json"
+                        f" (есть: {', '.join(sorted(uids))})"
+                    )
+                else:
+                    checked["dashboard"] += 1
+if errors:
+    for error in errors:
+        print(f"  {error}", file=sys.stderr)
+    sys.exit(f"ссылки в алертах: ошибок {len(errors)}")
+print(
+    f"проверено ссылок: runbook_url {checked['runbook']},"
+    f" dashboard_url {checked['dashboard']}; анкоров в runbook {len(anchors)}"
+)
+PY
+
 step "promtool test rules"
 shopt -s nullglob
 RULE_TESTS=(rules/tests/*.test.yaml)

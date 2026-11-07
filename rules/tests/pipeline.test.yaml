@@ -34,7 +34,7 @@ tests:
                 /metrics Loki не отдаёт метрики дольше 5 минут при живой цели: процесс
                 завис или упёрся в память. Grafana в это время не читает логи, а Alloy
                 копит ошибки push. Проверь под loki-0, kubectl logs и /ready.
-              runbook_url: "docs/runbook.md"
+              runbook_url: "https://github.com/morgenvor/k8s-observability-lab/blob/main/docs/runbook.md#пайплайн-логов"
       - eval_time: 10m
         alertname: LokiTargetMissing
         exp_alerts: []
@@ -63,7 +63,7 @@ tests:
                 Service, выключен ServiceMonitor, либо у Service нет готовых
                 эндпоинтов. В отличие от up == 0 это не «сломанный скрейп», а
                 «нечего скрейпить» — молчание не означает здоровье.
-              runbook_url: "docs/runbook.md"
+              runbook_url: "https://github.com/morgenvor/k8s-observability-lab/blob/main/docs/runbook.md#пайплайн-логов"
       - eval_time: 15m
         alertname: LokiDown
         exp_alerts: []
@@ -91,7 +91,7 @@ tests:
                 минут. Проверь Alloy (DaemonSet 2/2, его логи), push-URL
                 loki.monitoring.svc:3100 и фильтр __meta_kubernetes_pod_node_name;
                 если всё цело — возможно, в demo и monitoring просто тихо.
-              runbook_url: "docs/runbook.md"
+              runbook_url: "https://github.com/morgenvor/k8s-observability-lab/blob/main/docs/runbook.md#пайплайн-логов"
 
   - name: "Loki принимает строки: LokiNotIngesting молчит"
     interval: 1m
@@ -128,7 +128,7 @@ tests:
                 Одна из реплик DaemonSet alloy не скрейпится дольше 5 минут: логи
                 подов этой ноды не собираются. Проверь под на нужной ноде, его логи и
                 статус DaemonSet.
-              runbook_url: "docs/runbook.md"
+              runbook_url: "https://github.com/morgenvor/k8s-observability-lab/blob/main/docs/runbook.md#пайплайн-логов"
       - eval_time: 10m
         alertname: AlloyTargetMissing
         exp_alerts: []
@@ -154,7 +154,7 @@ tests:
                 Серии up{job="alloy"} нет 10 минут: удалён DaemonSet или Service,
                 выключен ServiceMonitor, либо у сервиса нет эндпоинтов. Сбор логов
                 при этом стоит полностью, а не частично.
-              runbook_url: "docs/runbook.md"
+              runbook_url: "https://github.com/morgenvor/k8s-observability-lab/blob/main/docs/runbook.md#пайплайн-логов"
       - eval_time: 15m
         alertname: AlloyDown
         exp_alerts: []
@@ -199,7 +199,7 @@ tests:
                 Живых целей alloy меньше, чем нод в кластере: логи части нод не
                 собираются. Типичные причины — под не встал (ресурсы, taint),
                 реплика не скрейпится или DaemonSet кем-то урезан по nodeSelector.
-              runbook_url: "docs/runbook.md"
+              runbook_url: "https://github.com/morgenvor/k8s-observability-lab/blob/main/docs/runbook.md#пайплайн-логов"
 
   # --- Alloy: потеря записей -----------------------------------------------
   - name: "Alloy выбрасывает логи: AlloyDroppedLogs горит по reason"
@@ -226,7 +226,7 @@ tests:
                 Alloy выбрасывает записи дольше 10 минут: очередь переполнена, Loki
                 отвечает ошибками или режет лимитами. Логи demo/monitoring теряются
                 безвозвратно — это не задержка, а пропуск. Смотри reason и логи Alloy.
-              runbook_url: "docs/runbook.md"
+              runbook_url: "https://github.com/morgenvor/k8s-observability-lab/blob/main/docs/runbook.md#пайплайн-логов"
 
   - name: "Alloy ничего не теряет: AlloyDroppedLogs молчит"
     interval: 1m
