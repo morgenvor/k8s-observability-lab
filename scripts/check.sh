@@ -418,11 +418,28 @@ def slug(heading):
 
 
 anchors = {}
+suffix_seen = {}
+in_fence = False
 with open("docs/runbook.md", encoding="utf-8") as handle:
     for line in handle:
+        # Заголовки внутри код-фенсов GitHub анкорами не считает: без этого
+        # "<<## ...>>" в примере дал бы анкор, который в реальности не резолвится.
+        if line.lstrip().startswith("```"):
+            in_fence = not in_fence
+            continue
+        if in_fence:
+            continue
         match = re.match(r"#{2,3} +(.+?)\s*$", line)
-        if match:
-            anchors.setdefault(slug(match.group(1)), match.group(1))
+        if not match:
+            continue
+        base = slug(match.group(1))
+        # Повторный заголовок GitHub делает "slug-1", "slug-2": без этого ссылка
+        # на второй такой заголовок выглядела бы мёртвой, хотя она работает.
+        if base in anchors:
+            suffix_seen[base] = suffix_seen.get(base, 1) + 1
+            anchors[f"{base}-{suffix_seen[base] - 1}"] = match.group(1)
+        else:
+            anchors[base] = match.group(1)
 if not anchors:
     sys.exit("в docs/runbook.md не найдено ни одного заголовка ##/###")
 
@@ -475,6 +492,10 @@ if errors:
     for error in errors:
         print(f"  {error}", file=sys.stderr)
     sys.exit(f"ссылки в алертах: ошибок {len(errors)}")
+# Ноль проверенных ссылок — не «всё хорошо», а «проверять было нечего»: файл правил
+# без groups прошёл бы через glob молча.
+if not sum(checked.values()):
+    sys.exit(f"в {rulefiles_dir} не найдено ни одного алерта со ссылками — проверять нечего")
 print(
     f"проверено ссылок: runbook_url {checked['runbook']},"
     f" dashboard_url {checked['dashboard']}; анкоров в runbook {len(anchors)}"
