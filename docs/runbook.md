@@ -122,6 +122,7 @@ containerd пишет на диск десятки секунд, API starve-ит
 | `ConfigMap/slo-demo` | `monitoring` | дашборд SLO/burn rate (фаза 3), та же метка |
 | `PrometheusRule/demo-slo`, `demo-slo-alerts` | `monitoring` | записывающие правила SLI и 6 burn-rate алертов (фаза 3) |
 | `PrometheusRule/demo-infra`, `demo-meta` | `monitoring` | инфраструктурные и мета-алерты (фаза 3) |
+| `PrometheusRule/demo-logs-pipeline` | `monitoring` | семь правил пайплайна логов Loki/Alloy (2026-11-07) |
 
 Правка `deploy/base/toxiproxy.json` подхватывается сама: конфиг собирается
 `configMapGenerator`, хеш попадает в имя ConfigMap и в pod template, поэтому
@@ -134,7 +135,7 @@ containerd пишет на диск десятки секунд, API starve-ит
 Применять корневой `kustomization.yaml` напрямую (`kubectl apply -k .`) нельзя: в нём
 заглушка `newTag: local`, поды уйдут в `ImagePullBackOff`. Штатный путь — `deploy.sh`.
 
-Откат (удаляет namespace `demo` целиком, дашборды `demo-red`/`slo-demo` и четыре
+Откат (удаляет namespace `demo` целиком, дашборды `demo-red`/`slo-demo` и пять
 `PrometheusRule` в `monitoring` — то есть вместе с правилами уходит и SLO-оповещение;
 образы в containerd остаются):
 
