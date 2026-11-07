@@ -14,7 +14,13 @@ need_cmd ssh
 need_cmd git
 require_cluster
 
-TAG="${IMAGE_TAG:-$(git rev-parse --short HEAD)}"
+# В режиме IMPORT_IMAGES теги заданы явно: git может быть недоступен (образ
+# привезли из другого каталога), и вычислять тег незачем.
+TAG=""
+if [ -z "${IMPORT_IMAGES:-}" ]; then
+  TAG="${IMAGE_TAG:-$(git rev-parse --short HEAD 2>/dev/null)}"
+  [ -n "${TAG}" ] || die "не удалось определить тег: нет git-репозитория? задай IMAGE_TAG"
+fi
 SSH_CONFIG="${LAB_SSH_CONFIG:-${PROJECT_ROOT}/../proxmox-lab/.secrets/ssh_config}"
 [ -f "${SSH_CONFIG}" ] || die "нет ssh-конфига лабы: ${SSH_CONFIG} (задай LAB_SSH_CONFIG; ключи и адреса живут вне репозитория)"
 
@@ -38,7 +44,7 @@ if [ -n "${IMPORT_IMAGES:-}" ]; then
   # в этом режиме не нужна — тегов приложений тут нет.
   read -r -a IMAGES <<<"${IMPORT_IMAGES}"
 else
-  [ "${#DOCKERFILES[@]}" -gt 0 ] || die "нет app/*/Dockerfile — собирать нечего (или задай IMPORT_IMAGES)"
+  [ "${#DOCKERFILES[@]}" -gt 0 ] || die "нет app/*/Dockerfile — импортировать нечего (или задай IMPORT_IMAGES)"
   for dockerfile in "${DOCKERFILES[@]}"; do
     IMAGES+=("$(basename "$(dirname "${dockerfile}")"):${TAG}")
   done

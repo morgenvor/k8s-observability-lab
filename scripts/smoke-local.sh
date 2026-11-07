@@ -142,8 +142,10 @@ process.stdin.on("end", () => {
 # --- 1. Сборка образов -------------------------------------------------------
 step() { printf '\n==> %s\n' "$*"; }
 
-shopt -s globstar nullglob
-for dockerfile in app/*/Dockerfile; do
+shopt -s nullglob
+DOCKERFILES=(app/*/Dockerfile)
+[ "${#DOCKERFILES[@]}" -gt 0 ] || die "нет app/*/Dockerfile — собирать нечего"
+for dockerfile in "${DOCKERFILES[@]}"; do
   name="$(basename "$(dirname "${dockerfile}")")"
   step "docker build ${name}:${IMAGE_TAG}"
   docker build -q -t "${name}:${IMAGE_TAG}" "$(dirname "${dockerfile}")" >/dev/null
@@ -178,6 +180,9 @@ assert_contains "http_inflight_requests" "${API_METRICS}" '^http_inflight_reques
 # --- 4. Нагрузка: /healthz, /metrics и рост счётчика за 10 с -----------------
 step "demo-load: /healthz и первые запросы к demo-api"
 wait_http "demo-load /healthz" "${LOAD_URL}/healthz"
+# /ready — готовность цикла, а не процесса: в кластере на неё смотрит
+# readinessProbe, поэтому контракт проверяем и здесь.
+assert_contains "demo-load /ready" "$(fetch_text "${LOAD_URL}/ready" 'готовность demo-load')" '^ready$'
 # Серия счётчика появляется только после первого завершённого запроса.
 for _ in $(seq 1 20); do
   if [ "$(metric_sum "${LOAD_URL}" load_requests_total 'outcome="ok"')" -gt 0 ]; then

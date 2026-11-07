@@ -55,10 +55,13 @@ fetch() {
 
 # have <бинарник> <ожидаемая версия> <команда проверки...>
 have() {
-  local bin="$1" expected="$2"
+  local bin="$1" expected="$2" out=""
   shift 2
   [ -x "${TOOLS_BIN}/${bin}" ] || return 1
-  "$@" 2>/dev/null | head -5 | grep -q -- "${expected}"
+  # Без `head`: под pipefail SIGPIPE от вовремя закрытого grep делал бы проверку
+  # ложноположительной/ложноотрицательной в зависимости от порядка команд.
+  out="$("$@" 2>/dev/null || true)"
+  grep -q -- "${expected}" <<<"${out}"
 }
 
 extract_bin() { # <архив> <путь внутри архива> <имя в .tools/bin> <сколько компонентов пути срезать>
@@ -126,7 +129,8 @@ else
   fetch "https://github.com/databus23/helm-diff/releases/download/${HELM_DIFF_VERSION}/diff-${HELM_DIFF_VERSION#v}-linux-${ARCH}.tgz" \
     "${HELM_DIFF_SHA256}" "diff-${HELM_DIFF_VERSION#v}-linux-${ARCH}.tgz"
   tar -xzf "${DOWNLOAD_DIR}/diff-${HELM_DIFF_VERSION#v}-linux-${ARCH}.tgz" -C "${PLUGINS_DIR}"
-  chmod +x "${PLUGINS_DIR}/diff/bin/diff" 2>/dev/null || true
+  chmod +x "${PLUGINS_DIR}/diff/bin/diff" \
+    || die "не удалось сделать исполняемым ${PLUGINS_DIR}/diff/bin/diff (плагин helm-diff не заработает)"
   info "установлен плагин helm-diff ${HELM_DIFF_VERSION}"
 fi
 

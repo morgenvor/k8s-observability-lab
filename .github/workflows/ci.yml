@@ -26,6 +26,10 @@ jobs:
       - name: Install pinned tools
         run: ./scripts/bootstrap-tools.sh
       - name: Offline checks
+        # Строгий режим: пропущенная проверка в CI не должна выглядеть как успех
+        # (локально допустимы пропуски вроде отсутствующего shellcheck).
+        env:
+          CHECK_STRICT: "1"
         run: ./scripts/check.sh
 
   images:

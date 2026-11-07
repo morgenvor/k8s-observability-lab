@@ -1,16 +1,19 @@
 #!/usr/bin/env bash
 # Офлайн-ворота проекта: те же проверки, что в CI, без обращения к кластеру.
-# Использование: ./scripts/check.sh [--images]
+# Использование: ./scripts/check.sh [--images] [--strict]
 #   --images  дополнительно собрать docker-образы приложений (медленнее)
+#   --strict  провал при любом пропуске проверки (в CI: CHECK_STRICT=1)
 set -euo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
 WITH_IMAGES=0
+STRICT="${CHECK_STRICT:-0}"
 for arg in "$@"; do
   case "${arg}" in
     --images) WITH_IMAGES=1 ;;
+    --strict) STRICT=1 ;;
     -h|--help)
-      sed -n '2,4p' "$0" | sed 's/^# \{0,1\}//'
+      sed -n '2,5p' "$0" | sed 's/^# \{0,1\}//'
       exit 0
       ;;
     *) die "неизвестный флаг: ${arg} (см. --help)" ;;
@@ -20,6 +23,11 @@ done
 cd "${PROJECT_ROOT}"
 require_tools helm helmfile kubectl kubeconform promtool
 mkdir -p "${PROJECT_ROOT}/.tmp/rendered"
+# PyYAML нужен выгрузке правил в формате promtool и подсчёту групп: проверяем
+# сразу, иначе шаг падал бы трейсбеком ModuleNotFoundError на середине прогона.
+need_cmd python3
+python3 -c 'import yaml' 2>/dev/null \
+  || die "нет модуля PyYAML для выгрузки правил (python3 -m pip install pyyaml)"
 
 STEP="подготовка"
 step() { STEP="$*"; printf '\n==> %s\n' "${STEP}"; }
@@ -250,11 +258,6 @@ RULEFILES_DIR="${PROJECT_ROOT}/.tmp/rendered/rulefiles"
 # :? — чтобы опечатка в PROJECT_ROOT не превратила это в rm -rf от корня.
 rm -rf "${RULEFILES_DIR:?}"
 mkdir -p "${RULEFILES_DIR}"
-need_cmd python3
-# PyYAML без объявления приезжает транзитивно с yamllint; проверяем явно, иначе
-# шаг падал бы трейсбеком ModuleNotFoundError вместо понятного сообщения.
-python3 -c 'import yaml' 2>/dev/null \
-  || die "нет модуля PyYAML для выгрузки правил (python3 -m pip install pyyaml)"
 shopt -s nullglob
 RULE_SOURCES=("${PROJECT_ROOT}"/rules/*.yaml)
 shopt -u nullglob
@@ -302,11 +305,18 @@ else
   SKIPPED+=("promtool test rules (rules/tests появятся в фазе 3)")
 fi
 
+# --- 5b. Поведение дриллов (offline): сигналы и cleanup ----------------------
+# Регресс на «passed без дрилла»: доказательство дрилла — JSON с result: passed,
+# и он не должен появляться у прерванного прогона или при сбое шага cleanup.
+# Кластер не нужен: каталоги evidence/state указывают в .tmp.
+step "тесты дриллов (offline)"
+bash drills/tests/signals.sh
+
 # --- 6. shellcheck (если установлен; в CI предустановлен) --------------------
 step "shellcheck"
 if command -v shellcheck >/dev/null 2>&1; then
   shopt -s nullglob
-  SHELL_FILES=(scripts/*.sh drills/*.sh)
+  SHELL_FILES=(scripts/*.sh drills/*.sh drills/tests/*.sh)
   shopt -u nullglob
   if [ "${#SHELL_FILES[@]}" -gt 0 ]; then
     shellcheck -S warning "${SHELL_FILES[@]}"
@@ -341,18 +351,36 @@ fi
 # ignore. Внутренние документы (.dsh/, AGENTS.md, CHANGELOG.md) исключены локальным
 # .git/info/exclude и намеренно содержат hostname лабы — их в git нет.
 step "скан секретов и адресов"
+# Без git список публикуемого набора не построить: молчаливый пропуск здесь означал
+# бы зелёные ворота без скана вовсе.
+git rev-parse --is-inside-work-tree >/dev/null 2>&1 \
+  || die "скан секретов требует git (git ls-files): репозиторий не найден"
 mapfile -d '' -t SCAN_FILES < <(git ls-files -z --cached --others --exclude-standard)
-if [ "${#SCAN_FILES[@]}" -eq 0 ]; then
-  SKIPPED+=("скан секретов (git не видит файлов)")
-elif grep -nIE \
+[ "${#SCAN_FILES[@]}" -gt 0 ] \
+  || die "git не видит файлов для скана — проверь репозиторий и .git/info/exclude"
+SCAN_OUT=".tmp/scan.out"
+scan_rc=0
+grep -nIE \
   '192\.168\.252\.|BEGIN [A-Z ]*PRIVATE KEY|ghp_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|xox[abprs]-|AKIA[0-9A-Z]{16}|k8s[-]server|k8s[-]agent' \
-  -- "${SCAN_FILES[@]}" ; then
-  die "найдены секреты, адреса или hostname лабы в файлах, которые попадут в git"
-fi
+  -- "${SCAN_FILES[@]}" >"${SCAN_OUT}" 2>&1 || scan_rc=$?
+case "${scan_rc}" in
+  0)
+    # Печатаем только файл:строку: содержимое совпавшей строки — это может быть
+    # сам секрет, и он не должен попадать в лог CI или терминал.
+    cut -d: -f1,2 "${SCAN_OUT}" | sed 's/^/  /'
+    die "найдены секреты, адреса или hostname лабы в файлах, которые попадут в git (файл:строка выше)"
+    ;;
+  1) : ;; # совпадений нет — норма
+  *) die "скан секретов не выполнился (grep вернул ${scan_rc}), см. ${SCAN_OUT}" ;;
+esac
 
 # --- Итог -------------------------------------------------------------------
-printf '\nOK: все доступные проверки прошли\n'
 if [ "${#SKIPPED[@]}" -gt 0 ]; then
-  printf 'пропущено:\n'
+  printf '\nпропущено:\n'
   printf '  - %s\n' "${SKIPPED[@]}"
+  if [ "${STRICT}" -eq 1 ]; then
+    die "строгий режим (--strict/CHECK_STRICT=1): проверок пропущено ${#SKIPPED[@]} — зелёный результат без них недостоверен"
+  fi
 fi
+printf '\nOK: все доступные проверки прошли\n'
+

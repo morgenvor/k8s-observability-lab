@@ -21,12 +21,13 @@ done
 require_cluster
 need_cmd git
 
-TAG="${IMAGE_TAG:-$(git rev-parse --short HEAD)}"
+TAG="${IMAGE_TAG:-$(git rev-parse --short HEAD 2>/dev/null)}"
+[ -n "${TAG}" ] || die "не удалось определить тег: нет git-репозитория? задай IMAGE_TAG"
 RENDERED="$(render_demo_manifests "${TAG}")"
 
 if [ "${ASSUME_YES}" -ne 1 ]; then
   [ -t 0 ] || die "нет интерактивного ввода (stdin не tty): для неинтерактивного запуска используй --yes"
-  warn "будут удалены namespace demo (поды/сервисы демо-контура), дашборды demo-red и slo-demo, PrometheusRule demo-slo/demo-slo-alerts/demo-infra/demo-meta в monitoring"
+  warn "будут удалены namespace demo (поды/сервисы демо-контура), дашборды demo-red и slo-demo, PrometheusRule demo-slo/demo-slo-alerts/demo-infra/demo-meta/demo-logs-pipeline в monitoring"
   printf 'Продолжить? [y/N] '
   # || answer="": при EOF read возвращает 1 и под set -e скрипт падал бы без сообщения
   read -r answer || answer=""
@@ -39,5 +40,8 @@ fi
 kubectl delete --ignore-not-found -f "${RENDERED}"
 # Удаление namespace асинхронно: без ожидания следующий deploy.sh может упереться
 # в ещё Terminating namespace. Дашборд удаляется отдельным объектом и ждать не нужно.
-kubectl wait --for=delete ns/demo --timeout=120s >/dev/null 2>&1 || true
+# Без ожидания следующий deploy.sh упрётся в ещё Terminating namespace, а его
+# ошибка будет выглядеть как «apply не сработал». Поэтому ждём и падаем явно.
+kubectl wait --for=delete ns/demo --timeout=120s >/dev/null 2>&1 \
+  || die "namespace demo не удалился за 120 с (Terminating?) — проверь kubectl get ns demo"
 info "демо-контур, дашборды и правила удалены (образы в containerd остались)"

@@ -14,7 +14,8 @@ need_cmd curl
 need_cmd docker
 need_cmd git
 
-TAG="${IMAGE_TAG:-$(git rev-parse --short HEAD)}"
+TAG="${IMAGE_TAG:-$(git rev-parse --short HEAD 2>/dev/null)}"
+[ -n "${TAG}" ] || die "не удалось определить тег: нет git-репозитория? задай IMAGE_TAG"
 WAIT_TARGETS="${WAIT_TARGETS:-180}"
 case "${WAIT_TARGETS}" in
   ''|*[!0-9]*) die "WAIT_TARGETS='${WAIT_TARGETS}' не число секунд (ожидается целое, например 180)" ;;
@@ -90,7 +91,7 @@ while [ "${SECONDS}" -lt "${deadline}" ]; do
   sink_up="$(prom_scalar 'count(up{job="alert-sink"} == 1)')"
   ok_rate="$(prom_scalar 'sum(rate(load_requests_total{outcome="ok"}[2m]))')"
   if [ "${api_up:-0}" -ge 2 ] && [ "${load_up:-0}" -ge 1 ] && [ "${sink_up:-0}" -ge 1 ] \
-      && awk "BEGIN{exit !(${ok_rate:-0} > 0)}"; then
+      && awk -v a="${ok_rate:-0}" 'BEGIN{exit !(a > 0)}'; then
     break
   fi
   sleep 5
@@ -99,31 +100,51 @@ done
 [ "${api_up:-0}" -ge 2 ] || die "demo-api: up==1 у ${api_up:-0} эндпоинтов (нужно 2); проверь поды и ServiceMonitor (метка release=monitoring)"
 [ "${load_up:-0}" -ge 1 ] || die "demo-load: up==1 у ${load_up:-0} целей (нужно 1); проверь ServiceMonitor/demo-load"
 [ "${sink_up:-0}" -ge 1 ] || die "alert-sink: up==1 у ${sink_up:-0} целей (нужно 1); проверь ServiceMonitor/alert-sink и под alert-sink"
-awk "BEGIN{exit !(${ok_rate:-0} > 0)}" \
+awk -v a="${ok_rate:-0}" 'BEGIN{exit !(a > 0)}' \
   || die "нагрузка не доходит до demo-api: rate(load_requests_total{outcome=\"ok\"}) = ${ok_rate:-0}; проверь toxiproxy (прокси demo-api:12001 → demo-api:8080) и TARGET_URL"
 info "цели живы (demo-api ${api_up}, demo-load ${load_up}, alert-sink ${sink_up}), ok-трафик ${ok_rate} rps"
 
 # Правила приезжают тем же apply, но подхватывает их оператор: без этой проверки
 # PrometheusRule без метки release=monitoring или с падающей группой доехал бы
 # молча — цели остались бы up=1, а правил бы не было. Проверяются ВСЕ группы
-# проекта (метрика Prometheus про факт вычисления), а не только записанные серии:
+# проекта (метрика Prometheus про загруженные группы), а не только записанные серии:
 # иначе отсутствие demo-slo-alerts/demo-infra/demo-meta прошло бы незамеченным.
-# 7 — число групп в rules/ (demo-slo 2, demo-slo-alerts 2, demo-infra 2, demo-meta 1);
-# при изменении состава правил поправь число или задай RULE_GROUPS_EXPECTED.
-RULE_GROUPS_EXPECTED="${RULE_GROUPS_EXPECTED:-7}"
+# Ожидаемое число выводится из rules/*.yaml (scripts/lib.sh: expected_rule_groups):
+# состав правил меняется в одном месте, число руками не правится. Переопределить
+# можно через RULE_GROUPS_EXPECTED (например, при разборе инцидента).
+RULE_GROUPS_EXPECTED="${RULE_GROUPS_EXPECTED:-$(expected_rule_groups)}"
 info "ожидание правил проекта в Prometheus (до 120 с, групп: ${RULE_GROUPS_EXPECTED})"
 rules_deadline=$((SECONDS + 120))
 groups=""
 while [ "${SECONDS}" -lt "${rules_deadline}" ]; do
-  groups="$(prom_scalar 'count(prometheus_rule_group_last_evaluation_timestamp_seconds{rule_group=~".*;demo-.*"})')"
+  groups="$(prom_scalar 'count(prometheus_rule_group_rules{rule_group=~".*;demo-.*"})')"
   if [ "${groups:-0}" -ge "${RULE_GROUPS_EXPECTED}" ]; then
     break
   fi
   sleep 5
 done
-[ "${groups:-0}" -ge "${RULE_GROUPS_EXPECTED}" ] \
-  || die "правил проекта в Prometheus ${groups:-0} из ${RULE_GROUPS_EXPECTED} групп: PrometheusRule не подхватились (метка release=monitoring?) или группа падает — смотри /api/v1/rules и поле lastError"
-info "правила проекта загружены: групп ${groups}"
+if [ "${groups:-0}" -ne "${RULE_GROUPS_EXPECTED}" ]; then
+  warn "группы правил проекта в Prometheus:"
+  curl -sf -G "http://127.0.0.1:${PROM_PORT}/api/v1/query" \
+    --data-urlencode 'query=count by (rule_group) (prometheus_rule_group_rules{rule_group=~".*;demo-.*"})' \
+    | sed -n 's/.*"rule_group":"\([^"]*\)".*/  - \1/p' || true
+  die "правил проекта ${groups:-0} групп, ожидалось ${RULE_GROUPS_EXPECTED}: PrometheusRule не подхватились (метка release=monitoring?) или группа упала — смотри /api/v1/rules и поле lastError"
+fi
+info "правила проекта загружены: групп ${groups} (ожидалось ${RULE_GROUPS_EXPECTED})"
+
+# Селектор сторожа SloAlertRulesAbsent (rules/meta.yaml) смотрит на группы по
+# хвосту метки rule_group («<путь к файлу>;<имя группы>»). Если формат метки в этой
+# версии Prometheus другой, absent() будет истинным всегда и правило загорится
+# ложно — это проверяется ДО деплоя правила одним запросом, а не ожиданием 10 минут:
+# при совпадении селектора absent() не может быть истинным. Отдельная живая проверка
+# «ALERTS{...} пусто через 10 минут» — в docs/runbook.md (приёмка после деплоя).
+selector_groups="$(prom_scalar 'count(prometheus_rule_group_rules{rule_group=~".*;demo-slo[.]alerts[.](availability|latency)"})')"
+[ "${selector_groups:-0}" = "2" ] \
+  || die "селектор SloAlertRulesAbsent видит ${selector_groups:-0} групп из 2: формат метки rule_group не совпал с выражением в rules/meta.yaml — правило загорится ложно; проверь prometheus_rule_group_rules в /api/v1/query"
+pending_alerts="$(prom_scalar 'count(ALERTS{alertname="SloAlertRulesAbsent"}) or vector(0)')"
+[ "${pending_alerts:-0}" = "0" ] \
+  || die "SloAlertRulesAbsent уже в ALERTS: правило считает группы отсутствующими — не деплой, сначала разберись с rule_group"
+info "сторож групп burn-rate: селектор находит 2 группы, ложных ALERTS нет"
 
 info "проверка записанных серий SLI"
 av="$(prom_scalar 'count(slo:demo_availability:ratio_5m) or vector(0)')"

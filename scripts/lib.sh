@@ -38,6 +38,33 @@ require_tools() {
   use_tools
 }
 
+# Число групп правил проекта — из самих файлов rules/*.yaml, а не из константы в
+# скрипте: новый PrometheusRule не может «тихо» не доехать до Prometheus, а число
+# не нужно править руками (раньше «7» жило и в комментарии, и в коде).
+expected_rule_groups() {
+  need_cmd python3
+  python3 -c 'import yaml' 2>/dev/null \
+    || die "нет модуля PyYAML для подсчёта групп правил (python3 -m pip install pyyaml)"
+  local files=()
+  mapfile -t files < <(printf '%s\n' "${PROJECT_ROOT}"/rules/*.yaml)
+  [ -e "${files[0]}" ] || die "в rules/ нет ни одного .yaml — считать нечего"
+  python3 - "${files[@]}" <<'PY'
+import sys
+
+import yaml
+
+total = 0
+for path in sys.argv[1:]:
+    with open(path, encoding="utf-8") as handle:
+        doc = yaml.safe_load(handle)
+    # Служебные файлы (kustomization.yaml) — не правила.
+    if not isinstance(doc, dict) or doc.get("kind") != "PrometheusRule":
+        continue
+    total += len((doc.get("spec") or {}).get("groups") or [])
+print(total)
+PY
+}
+
 # KUBECONFIG: из env, иначе дефолт лабы (файл вне репозитория).
 # Возвращает путь в stdout; при отсутствии — ошибка с понятным следующим шагом.
 default_kubeconfig() {
