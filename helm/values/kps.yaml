@@ -59,6 +59,23 @@ grafana:
       url: http://loki.monitoring.svc:3100
       access: proxy
       isDefault: false
+  # 2026-11-07: PVC для /var/lib/grafana. До этого data-каталог был emptyDir, и при
+  # каждом рестарте пода терялись пользовательские настройки из sqlite: часовой пояс
+  # (user.timezone), избранные (starred) дашборды, папки/аннотации и API-ключи.
+  # Дашборды и datasource приходят из ConfigMap, поэтому их это не касалось — но
+  # «моё» состояние Grafana живёт только в grafana.db.
+  # 1Gi с запасом: grafana.db в этой лабе — единицы мегабайт.
+  # Recreate, а не RollingUpdate: PVC ReadWriteOnce на local-path (hostPath-подобный
+  # PV с привязкой к ноде). При раскатке два пода одновременно просят один RWO-том,
+  # и новый под на другой ноде встал бы в Multi-Attach/volume node affinity conflict,
+  # то есть rollout подвис. Recreate даёт паузу в несколько секунд — для лабы ок.
+  persistence:
+    enabled: true
+    type: pvc
+    accessModes: ["ReadWriteOnce"]
+    size: 1Gi
+  deploymentStrategy:
+    type: Recreate
 
 alertmanager:
   enabled: true
