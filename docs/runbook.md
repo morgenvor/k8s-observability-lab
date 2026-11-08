@@ -840,10 +840,23 @@ kube-prometheus-stack.
    — маршрут на месте? В действующем конфиге это дерево: ветка `email` с
    `continue: true`, ветка `alert-sink` по `severity` и catch-all без матчеров.
 4. `alertmanager_config_last_reload_successful{job="monitoring-kube-prometheus-alertmanager"}`
-   и лог Alertmanager: ошибка конфига останавливает **всю** доставку.
+   и лог Alertmanager: при неудачном reload новый конфиг **не применяется**, продолжает
+   работать предыдущий — поэтому доставка «как раньше» не означает «конфиг верный».
+   Сам факт неудачи пишет `AlertmanagerFailedReload` (critical → e-mail); ошибка на старте
+   пода (битый или неполный конфиг) уже роняет Alertmanager целиком.
 5. Состояние самого sink: `up{job="alert-sink"}`, `kubectl -n demo logs deploy/alert-sink`.
 
 Устройство маршрута и проверка доставки — раздел «Маршрут уведомлений и alert-sink».
+
+**Ограничение этих двух правил:** они идут тем же путём, который сторожат. `severity:
+ticket` → `alert-sink`, а в e-mail уходят только `page|critical`, поэтому при полностью
+сломанном маршруте до sink уведомление о поломке тоже не доедет — сигнал будет виден в
+UI Prometheus (`/alerts`) и Alertmanager, но не в почте. Отдельная ветка
+`alertname=~"AlertSink.*"` → `email` с `continue: true` (независимый канал) — кандидат в
+следующий шаг: она меняет дерево маршрутов и ассерт `check.sh` на три child-route.
+Второе ограничение: пока `alertsink_last_notification_timestamp_seconds` равен 0 (сразу
+после рестарта пода), первое правило слепо, а второму нужен аптайм 5,5 ч — sink, который
+рестартуют чаще, чем раз в 5,5 ч, при сломанном маршруте не репортится вовсе.
 
 **Гигиена:** силенсы создаются **в UI Alertmanager** (`alertmanager.lab.internal`), не в
 Prometheus: кнопка «Silence» в UI Prometheus ведёт на pod IP, который из браузера не

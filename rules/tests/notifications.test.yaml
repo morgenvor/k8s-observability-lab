@@ -9,10 +9,14 @@
 #
 # Покрытые пары:
 #  * свежее уведомление + долгий uptime — тишина (норма);
+#  * возраст уведомления чуть меньше порога (19700 с) — тишина: привязывает порог
+#    к 19800, иначе подмена 19800 на меньшую константу прошла бы незамеченной;
 #  * уведомление старше 5,5 ч при живом sink — AlertSinkHeartbeatMissing;
 #  * рестарт пода (gauge = 0, uptime маленький) — оба правила молчат;
 #  * долгий uptime и gauge = 0 — AlertSinkNeverReceived;
-#  * up == 0 — heartbeat молчит: упавший sink ловят правила чарта по цели.
+#  * up == 0 при старом gauge — heartbeat молчит: упавший sink ловят правила чарта;
+#  * up == 0 при gauge = 0 — молчат оба: проверяет ветку up == 1 внутри
+#    AlertSinkNeverReceived (без неё правило загорелось бы на мёртвой цели).
 rule_files:
   - ../../.tmp/rendered/rulefiles/notifications.yaml
 evaluation_interval: 1m
@@ -123,7 +127,7 @@ tests:
         exp_alerts: []
 
   # --- sink упал: это не «тишина пути» ------------------------------------------
-  - name: "up == 0: heartbeat молчит, падение ловят правила чарта"
+  - name: "up == 0 при старом gauge: heartbeat молчит, падение ловят правила чарта"
     interval: 1m
     input_series:
       - series: 'alertsink_last_notification_timestamp_seconds{job="alert-sink", namespace="demo"}'
@@ -138,4 +142,44 @@ tests:
         exp_alerts: []
       - eval_time: 24h
         alertname: AlertSinkNeverReceived
+        exp_alerts: []
+
+  # --- возраст чуть меньше порога: привязка 19800 ------------------------------
+  # 86400 - 66700 = 19700 с, то есть на 100 с меньше порога. Тест падает, если порог
+  # в правиле уменьшат (19800 -> 3600 и подобное): тогда здесь было бы firing.
+  - name: "уведомление моложе порога на 100 с: оба правила молчат"
+    interval: 1m
+    input_series:
+      - series: 'alertsink_last_notification_timestamp_seconds{job="alert-sink", namespace="demo"}'
+        values: '66700x1441'
+      - series: 'alertsink_process_start_time_seconds{job="alert-sink", namespace="demo"}'
+        values: '64800x1441'
+      - series: 'up{job="alert-sink", namespace="demo"}'
+        values: '1x1441'
+    alert_rule_test:
+      - eval_time: 24h
+        alertname: AlertSinkHeartbeatMissing
+        exp_alerts: []
+      - eval_time: 24h
+        alertname: AlertSinkNeverReceived
+        exp_alerts: []
+
+  # --- мёртвая цель и пустой gauge -------------------------------------------
+  # Проверяет ветку up == 1 внутри AlertSinkNeverReceived: без неё правило
+  # загорелось бы на цели, которой уже нет (uptime по метрике > 5,5 ч, gauge = 0).
+  - name: "up == 0 и gauge = 0: AlertSinkNeverReceived молчит"
+    interval: 1m
+    input_series:
+      - series: 'alertsink_last_notification_timestamp_seconds{job="alert-sink", namespace="demo"}'
+        values: '0x1441'
+      - series: 'alertsink_process_start_time_seconds{job="alert-sink", namespace="demo"}'
+        values: '64800x1441'
+      - series: 'up{job="alert-sink", namespace="demo"}'
+        values: '0x1441'
+    alert_rule_test:
+      - eval_time: 24h
+        alertname: AlertSinkNeverReceived
+        exp_alerts: []
+      - eval_time: 24h
+        alertname: AlertSinkHeartbeatMissing
         exp_alerts: []
