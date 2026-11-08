@@ -502,6 +502,13 @@ export SMTP_USERNAME='alertmanager@<ваш-домен>'
 конфиге), а при пересоздании пода Alertmanager не смонтирует том. Поэтому
 `scripts/deploy.sh` проверяет Secret до apply и падает с готовой командой создания.
 
+**Пароль в сгенерированном конфиге лежит открытым текстом.** Оператор не монтирует
+Secret файлом, а подставляет значение в `alertmanager-monitoring-kube-prometheus-alertmanager-generated`
+(поле `auth_password`). В манифесте и в git пароля нет, но при просмотре конфига он
+виден — маскируйте вывод (`sed -E 's/auth_password:.*/auth_password: <скрыт>/'`) и не
+копируйте его в тикеты, чаты и логи CI. Утечка = смена пароля приложения у провайдера,
+пересоздание Secret и `deploy.sh`.
+
 Адреса подставляет оверлей при рендере (`scripts/lib.sh`: JSON6902-патч
 `/spec/receivers/1/emailConfigs/0/{to,from,smarthost,authUsername}`), в git лежат
 плейсхолдеры `example.invalid`. `SMTP_SMARTHOST` валидируется как `host:port`.
@@ -527,9 +534,9 @@ curl -sG http://127.0.0.1:9090/api/v1/query --data-urlencode \
 ```
 
 Проба `page` должна появиться и в `/timeline` (catch-all + `continue`), и в ящике —
-проверять оба места: письмо может уйти в «Спам». Запись из `/api/v2/alerts` живёт до
-`resolve_timeout` (5m) либо снимается `DELETE /api/v2/alerts`; если проба осталась
-висеть, у неё не было `endsAt`.
+проверять оба места: письмо может уйти в «Спам». Снять пробу нельзя: у `/api/v2/alerts`
+нет метода удаления (`DELETE` отвечает 405). Проба без `endsAt` живёт до `resolve_timeout`
+(5m), после чего Alertmanager присылает `resolved` — это заодно проверяет `sendResolved`.
 
 **Типовые причины «письма не приходят»:**
 

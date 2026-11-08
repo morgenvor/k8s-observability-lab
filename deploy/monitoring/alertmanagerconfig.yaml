@@ -73,10 +73,13 @@ spec:
           from: "alertmanager@example.invalid"
           smarthost: "smtp.example.invalid:587"
           authUsername: "alertmanager"
-          # SecretKeySelector: оператор монтирует ключ секрета файлом, пароль в
-          # манифесте не появляется. Secret создаётся ДО применения конфига
-          # (docs/runbook.md, «Маршрут уведомлений»): без него оператор не соберёт
-          # конфиг и встанет вся доставка, включая sink.
+          # SecretKeySelector: в манифесте пароля нет. Важно: оператор НЕ монтирует
+          # Secret файлом, а подставляет значение в сгенерированный конфиг
+          # (secret ...-generated, поле auth_password) — при просмотре он открыт,
+          # поэтому вывод конфига в логи/тикеты маскируют (docs/runbook.md).
+          # Secret создаётся ДО применения конфига (docs/runbook.md, «Маршрут
+          # уведомлений»): без него оператор не соберёт конфиг и встанет вся
+          # доставка, включая sink.
           authPassword:
             name: alertmanager-smtp
             key: smtp-password

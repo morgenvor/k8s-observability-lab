@@ -37,6 +37,12 @@
 на `c28879d` было 24 файла yamllint, 35 тестов, 31 правило в 4 файлах и `kustomize` 20
 объектов — добавились `rules/pipeline.yaml` и тесты, которых тогда не было.
 
+Прогон 2026-11-08 (`--strict`, HEAD `de40d93` + правки документов): `OK`, пропусков нет;
+26 файлов yamllint, 39 правил в 5 файлах, ссылок `runbook_url 19, dashboard_url 6`,
+анкоров в runbook 23. Новые шаги этого прогона — «маршрут уведомлений в рендере»
+(три child-route, `continue`, catch-all, подстановка адресов двумя рендерами) и «скан
+личных адресов» (6 адресов, все в `example.invalid`).
+
 В песочнице, где шли прогоны, шагам `npm ci` и `docker build` нужны кеши внутри проекта
 (`npm_config_cache`, `DOCKER_CONFIG`) — это ограничение среды, а не проекта.
 
@@ -73,15 +79,22 @@
 | 2026-11-07 | хранилище Grafana | `PUT /api/user/preferences`, рестарт пода | часовой пояс и starred-дашборды пережили пересоздание пода; `grafana.db` на PVC |
 | 2026-11-07 | доступ к UI | `curl -H 'Host: <host>' http://<нода>/` | Prometheus 302 → `/query`, Alertmanager 200, Grafana `/login` 200 |
 | 2026-11-07 | группы правил | `count by (rule_group) (prometheus_rule_group_rules{...})` | 9 групп проекта, без `lastError` |
+| 2026-11-08 | маршрут по `severity` | сгенерированный конфиг Alertmanager, `/api/v2/alerts`, `/timeline` | дерево доехало: `severity=~"page|critical"` → `email` (`continue: true`), `ticket|info|warning|none` → `alert-sink`, catch-all → `alert-sink`; проба `page` получила получателей `email` + `alert-sink`, проба `ticket` — только `alert-sink` |
+| 2026-11-08 | доставка e-mail | `/metrics` Alertmanager (напрямую из пода), гейт `deploy.sh` | `alertmanager_notifications_total{integration="email"} = 1`, `failed_total{integration="email"}` (все причины) `= 0` — SMTP принял письмо; `alertmanager_config_last_reload_successful = 1` сразу после apply |
+| 2026-11-08 | egress до SMTP | `nc -z <smtp-host> 587` с рабочей машины и из пода Alertmanager | порт открыт в обоих местах; проверено до apply — закрытый egress делает ветку e-mail нерабочей при любом конфиге |
+| 2026-11-08 | доставка в приёмник | `/timeline`, `alertsink_*` | 4 уведомления: 2 × `Watchdog` (`none`), `EmailProbePage` (`page`, пришёл через catch-all), `EmailProbeTicket` (`ticket`) |
 
 ## Ещё не подтверждено живьём
 
 Список ведётся явно, чтобы «написано в коде» не путалось с «проверено на стенде»:
 
-- доставка `page` в почтовый ящик и `ticket` в `/timeline` по маршруту v1.1: ветки
-  `email` и catch-all в конфиге есть (`deploy/monitoring/alertmanagerconfig.yaml`,
-  Phase 3 плана v1.1), но живой прогон требует SMTP-аккаунта и открытого egress
-  465/587 со стенда — письмо и `/timeline` ещё не сверяли;
+- получение письма в ящике (проверяет владелец, включая «Спам») и скриншот
+  `docs/images/alert-email.png`: отправка подтверждена метриками Alertmanager, вручение
+  письма — только глазами;
+- `resolved`-ветка e-mail/`sendResolved`: проба через `/api/v2/alerts` без `endsAt`
+  осталась `active` (снять её нельзя, `DELETE` отдаёт 405; статус пересчитывается только
+  при обновлении алерта или сборке мусора), поэтому закрытие письмом этой пробой не
+  проверено — его покажет ближайший дрилл;
 - heartbeat пути уведомлений (правила `AlertSinkHeartbeatMissing`, `AlertSinkNeverReceived`);
 - правило Loki ruler `DemoApi5xxFromLogs`: `firing` в дрилле `errors` и молчание в `latency`;
 - `stage.drop` Alloy: отсутствие `entry too far behind` после рестарта и рост счётчика
