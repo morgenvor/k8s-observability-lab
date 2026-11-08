@@ -3,11 +3,13 @@ kind: Kustomization
 # Свои манифесты проекта одним `kubectl apply -k .` (фазы v1.0):
 # deploy/base — namespace demo, приложения, toxiproxy, ServiceMonitor (фаза 2);
 # deploy/dashboards — ConfigMap дашбордов в monitoring (фаза 2);
+# deploy/loki-rules — ConfigMap правил Loki ruler (фаза 5 v1.1);
 # deploy/monitoring — AlertmanagerConfig в monitoring (фаза 4);
 # rules — PrometheusRule (фаза 3).
 resources:
   - deploy/base
   - deploy/dashboards
+  - deploy/loki-rules
   - deploy/monitoring
   - rules
 

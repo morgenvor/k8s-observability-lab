@@ -13,7 +13,8 @@ Pet-проект про эксплуатацию: SLI/SLO с burn-rate алер�
   уведомлений, а маршрут делит поток по `severity` (e-mail для `page`/`critical`,
   приёмник для остального) — и путь уведомлений сам под наблюдением;
 - **логи — рабочий инструмент, а не галочка**: Loki + Alloy с фильтром по ноде, панель
-  логов в дашборде и алерт на пайплайн логов;
+  логов в дашборде, алерт на пайплайн логов и правило по логам в Loki ruler
+  (`DemoApi5xxFromLogs`) — второй класс проверки рядом с метриками;
 - **дриллы с доказательствами**: `evidence/*.json` со схемой `drill-evidence/v1` содержат
   время реакции, факт `firing`/`resolved` и доставку уведомления в приёмник.
 
@@ -29,6 +30,7 @@ flowchart LR
   prometheus --> grafana["Grafana<br/>demo-red, slo-demo"]
   loki --> grafana
   prometheus --> alertmanager["Alertmanager<br/>маршрут по severity"]
+  loki -->|"ruler: DemoApi5xxFromLogs"| alertmanager
   alertmanager -->|"ticket, info, warning, none"| sink["alert-sink<br/>/timeline + метрики"]
   alertmanager -->|"page, critical"| email["e-mail (SMTP)"]
 ```
@@ -80,9 +82,9 @@ flowchart TD
 | toxiproxy | 2.9.0 | `deploy/base/toxiproxy.yaml` |
 | demo-api, demo-load, alert-sink | node:22.23.4-alpine, тег = короткий SHA | `app/*/Dockerfile` |
 
-Своё: 22 алерта и 20 записывающих правил (42 правила) в 6 `PrometheusRule` (10 групп),
-два дашборда (`demo-red`, `slo-demo`), четыре дрилла, офлайн-ворота `./scripts/check.sh`
-(их же запускает CI).
+Своё: 22 алерта и 20 записывающих правил (42 правила) в 6 `PrometheusRule` (10 групп)
+плюс одно правило Loki ruler (`deploy/loki-rules`), два дашборда (`demo-red`, `slo-demo`),
+четыре дрилла, офлайн-ворота `./scripts/check.sh` (их же запускает CI).
 
 ## Быстрый старт
 

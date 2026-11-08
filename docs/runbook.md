@@ -314,6 +314,50 @@ kubectl -n monitoring port-forward svc/loki 3100:3100
   `./scripts/check.sh` падает, если из рендера пропали `retention_period: 72h`,
   `retention_enabled: true`, push-URL, фильтр по ноде, или вернулись canary/кеши.
 
+### Правила Loki ruler (фаза 5 v1.1)
+
+Ruler — компонент внутри того же пода Loki (`-target=all`), который исполняет правила
+по логам и отправляет результат в Alertmanager. Это второй класс проверки после
+метрик: в логах есть то, чего нет в метриках (конкретный `status`, `route`,
+`request_id`, событие `request_aborted` без HTTP-ответа), и наоборот — сетевой обрыв
+до приложения виден только клиентской метрике.
+
+```bash
+# что загрузилось (ruler API: порт 3100, тот же Service, что у Loki)
+kubectl -n monitoring port-forward svc/loki 3100:3100
+#   curl -s http://127.0.0.1:3100/prometheus/api/v1/rules    → группа demo-api-logs
+#   curl -s http://127.0.0.1:3100/prometheus/api/v1/alerts   → что горит сейчас
+# правила в поде лежат здесь (ConfigMap loki-rules, только на чтение)
+kubectl -n monitoring get configmap loki-rules -o jsonpath='{.data}' | head -40
+# доставка: Alertmanager UI (alertmanager.lab.internal) или /timeline у sink
+kubectl -n demo port-forward svc/alert-sink 8080:8080   # → http://127.0.0.1:8080/timeline
+```
+
+- Один файл правила — `deploy/loki-rules/demo-api-5xx.yaml` (`DemoApi5xxFromLogs`,
+  `severity: ticket`): `sum(count_over_time({namespace="demo", app="demo-api"} | json |
+  status >= 500 [5m])) > 0`, `for: 2m`. Применяется с остальными манифестами
+  (`./scripts/deploy.sh`) — kustomize отдаёт его как ConfigMap `loki-rules`.
+- **Тенант в пути — не опечатка.** Локальное хранилище правил читает
+  `<directory>/<tenant>/<файл>`, а при `auth_enabled: false` тенант всегда `fake`.
+  Поэтому том смонтирован в `/etc/loki/rules/fake`, и новый файл правила обязан
+  попасть в этот каталог (ключ ConfigMap — имя файла). Правило, положенное в корень
+  `/etc/loki/rules`, ruler не увидит: ошибки не будет, будет тишина.
+- Правка правила в ConfigMap: kustomize генерирует его **без хеша в имени**, поэтому
+  обновляется тот же объект, а под получает новые данные без пересоздания тома.
+  Ruler перечитывает правила по своему циклу (интервал группы `1m`), рестарт пода
+  Loki для этого не нужен.
+- Отключение: `ruler.enabled: false` в `helm/values/loki.yaml` →
+  `helmfile apply -l name=loki`. Если правило только мешает, но ruler нужен, дешевле
+  убрать его файл из `deploy/loki-rules/kustomization.yaml`.
+- Побочный эффект правки values Loki: apply пересоздаёт под **всего** Loki, то есть
+  на время рестарта приём логов останавливается. Alloy при этом не теряет данные —
+  он ретраит запись (в логе видны ошибки push), но Grafana в эти секунды не читает
+  логи. В тихое окно это секунды, а не минуты.
+- Офлайн-гарантия: шаг «Loki ruler в рендере» в `./scripts/check.sh` проверяет всю
+  цепочку — блок `ruler` в конфиге Loki (URL Alertmanager, `enable_api`, локальное
+  хранилище), том `loki-rules` у StatefulSet с путём тенанта, ConfigMap с нужным
+  ключом и структуру самого правила.
+
 ### Метрики Loki и Alloy (с 2026-11-07)
 
 `ServiceMonitor` для обоих релизов включён в values, поэтому `up` и `/metrics` теперь
@@ -815,6 +859,30 @@ kube-prometheus-stack.
   `__meta_kubernetes_pod_node_name`; возможно, в `demo`/`monitoring` просто тихо.
 
 Как читать логи и метрики — разделы «Логи: Loki и Alloy» и «Метрики Loki и Alloy».
+
+### Правило по логам (Loki ruler)
+
+`DemoApi5xxFromLogs` (`deploy/loki-rules/demo-api-5xx.yaml`, `severity: ticket`) —
+единственный алерт проекта, который считается **по логам, а не по метрикам**: ruler
+внутри Loki видит строки `http_request` со `status >= 500` за 5 минут и держит
+`for: 2m`. Он дополняет SLO-алерты, а не заменяет их.
+
+- Сработал → `kubectl -n demo logs deploy/demo-api --tail=100` (или Grafana →
+  Explore → `{namespace="demo", app="demo-api"} | json | status >= 500`): в строках
+  есть `status`, `route`, `request_id`. Дальше — раздел 7 по классу причины
+  (ошибки, латентность, ресурсы).
+- **Логи и метрики расходятся намеренно.** Метрика доступности считает ответы
+  сервера в окне 3 дней и не различает причин; лог видит `499` и `request_aborted`
+  (обрыв клиента) как отдельное событие, но **не видит** сетевой обрыв до приложения
+  — при разрыве через toxiproxy запрос до `demo-api` не доходит и строки в логе не
+  появляется. Поэтому «метрика красная, лог молчит» — нормальный случай: смотри
+  `load_requests_total{outcome="timeout"}` и сам toxiproxy.
+- «Лог горит, метрика спокойна» — тоже возможен: 5xx в коротком окне 5 м при
+  долгом окне SLO ещё не выедает бюджет. Это ранний сигнал, а не дубль page-алерта,
+  поэтому `ticket`.
+- Правило не горит → сначала проверь, что ruler жив: `/prometheus/api/v1/rules` на
+  порту 3100 (раздел «Правила Loki ruler»), затем что логи вообще доезжают
+  (`LokiNotIngesting`, `AlloyDroppedLogs` из «Пайплайн логов»).
 
 ### Путь уведомлений
 

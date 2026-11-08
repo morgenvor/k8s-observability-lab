@@ -1,0 +1,16 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+# Правила Loki ruler в monitoring: их читает сам Loki из смонтированного каталога,
+# оператор kube-prometheus-stack тут не участвует (это не PrometheusRule).
+# Имя ConfigMap без хеша: правка правила обновляет данные тома, но не переименовывает
+# том — с хешем каждый коммит в правила пересоздавал бы его и требовал рестарта пода.
+configMapGenerator:
+  - name: loki-rules
+    files:
+      - demo-api-5xx.yaml
+    options:
+      labels:
+        app.kubernetes.io/part-of: k8s-observability-lab
+      disableNameSuffixHash: true
+
+namespace: monitoring

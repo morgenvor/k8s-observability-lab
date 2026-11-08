@@ -39,6 +39,25 @@ loki:
   limits_config:
     # Совпадает с окном SLO и Prometheus retention: логи нужны на те же 3 суток дриллов.
     retention_period: 72h
+  # Ruler (фаза 5 v1.1): правило по логам — второй класс проверки рядом с метриками
+  # Prometheus. Чарт 7.5.0 мержит наш rulerConfig поверх вычисленного storage
+  # (`mergeOverwrite` в шаблоне loki.rulerConfig), поэтому storage задаётся здесь.
+  rulerConfig:
+    # Alertmanager того же стека: Service релиза monitoring, порт 9093. Правила уходят
+    # тем же деревом маршрутов, что и алерты Prometheus (severity: ticket → alert-sink).
+    alertmanager_url: http://monitoring-kube-prometheus-alertmanager.monitoring.svc:9093
+    # GET /prometheus/api/v1/rules на порту 3100 — единственный способ офлайн-класса
+    # увидеть, что правило реально загрузилось; без этого флага ручка не поднимается.
+    enable_api: true
+    # Дефолт rule_path — /rules, но этот путь в поде не смонтирован, а root FS
+    # readOnlyRootFilesystem: true. /tmp — emptyDir из шаблона StatefulSet, туда писать можно.
+    rule_path: /tmp/loki-rules
+    storage:
+      type: local
+      # Каталог читает локальное хранилище правил; файлы приезжают из ConfigMap
+      # loki-rules (deploy/loki-rules) — см. singleBinary.extraVolumeMounts ниже.
+      local:
+        directory: /etc/loki/rules
   # Retention в Loki удаляет только compactor: без этого блока limits_config
   # retention_period игнорируется, а PVC 5Gi забивается до ReadOnly.
   compactor:
@@ -58,6 +77,19 @@ singleBinary:
     limits:
       cpu: 500m
       memory: 512Mi
+  # Правила Loki ruler — ConfigMap loki-rules из deploy/loki-rules, только на чтение.
+  # Том монтируется сразу в подкаталог тенанта: локальное хранилище правил читает
+  # `<directory>/<tenant>/<файл>`, а при auth_enabled: false тенант — "fake"
+  # (docs Loki, multi-tenancy). Имя ключа ConfigMap в тенанта превратить нельзя:
+  # в ключах ConfigMap слэш недопустим, а mountPath — можно.
+  extraVolumes:
+    - name: loki-rules
+      configMap:
+        name: loki-rules
+  extraVolumeMounts:
+    - name: loki-rules
+      mountPath: /etc/loki/rules/fake
+      readOnly: true
   persistence:
     # Явно, хотя дефолт чарта — true: PVC 5Gi и его удаление при destroy — часть
     # контракта отката фазы 5, а не случайная деталь values.
@@ -104,9 +136,14 @@ lokiCanary:
 test:
   enabled: false
 
-# Ruler-правил в Loki у проекта нет (вне объёма v1.0), поэтому sidecar, который ищет
-# ConfigMap/Secret с меткой loki_rule, не нужен: лишний контейнер в поде и RBAC на
-# чтение этих объектов во всех namespace.
+# Ruler включён явно (дефолт чарта — тоже true): с v1.1 в нём живёт правило по логам
+# `DemoApi5xxFromLogs` (deploy/loki-rules). Раньше здесь было «правил у проекта нет».
+ruler:
+  enabled: true
+
+# Sidecar, который ищет ConfigMap/Secret с меткой loki_rule, по-прежнему не нужен:
+# правило приезжает из своего ConfigMap прямым томом (см. singleBinary.extraVolumes).
+# Sidecar стоил бы лишнего контейнера в поде и RBAC на чтение чужих объектов.
 sidecar:
   rules:
     enabled: false
