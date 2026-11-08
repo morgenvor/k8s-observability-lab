@@ -467,14 +467,18 @@ kubectl -n demo port-forward svc/alert-sink 8080:8080
 
 - родитель — `alert-sink` (`groupBy: [alertname, service]`, `groupWait: 10s`,
   `groupInterval: 30s`, `repeatInterval: 4h`);
-- child 1 — `severity=~"page|critical"` → receiver `email`, `continue: true`;
-- child 2 — `severity=~"ticket|info|warning|none"` → receiver `alert-sink`;
-- child 3 — **catch-all без матчеров** → `alert-sink`.
+- child 1 — `alertname=~"AlertSink.*"` → receiver `email`, `continue: true` (алерты самого
+  пути уведомлений: у них `severity: ticket`, но канал нужен вне sink);
+- child 2 — `severity=~"page|critical"` → receiver `email`, `continue: true`;
+- child 3 — `severity=~"ticket|info|warning|none"` → receiver `alert-sink`;
+- child 4 — **catch-all без матчеров** → `alert-sink`.
 
 Почему так: `page`/`critical` означают «человеку пора смотреть», `ticket|info|warning` —
 «разберут в рабочее время», но журнал `/timeline` нужен и для доказательств дриллов,
 поэтому `page` попадает в оба места (разные получатели — это два уведомления, а не
-дубль одного). `continue: true` у первой ветки обязателен: без него Alertmanager
+дубль одного). Первая ветка нужна по той же логике, но с другой стороны: `AlertSink*`
+(`rules/notifications.yaml`) сообщают, что маршрут до sink сломан, и почта для них —
+единственный канал, который не зависит от наблюдаемого пути. `continue: true` у первой ветки обязателен: без него Alertmanager
 останавливается на ней и остальные ветки для того же алерта не рассматривает.
 Catch-all — страховка от нового или отсутствующего `severity`: без него такой алерт
 ушёл бы в `null`-получатель и исчез молча.
@@ -645,7 +649,9 @@ kubectl -n demo get endpointslices -l kubernetes.io/service-name=demo-api \
 | `none` | чарт (`Watchdog`) | «доставка работает»: всегда firing | `alert-sink` |
 
 Последняя колонка — действующий маршрут (`deploy/monitoring/alertmanagerconfig.yaml`:
-ветка `page|critical` → `email`, остальное → `alert-sink`, плюс catch-all в sink).
+ветка `alertname=~"AlertSink.*"` → `email` с `continue: true`, ветка `page|critical` →
+`email`, остальное → `alert-sink`, плюс catch-all в sink). Исключение из таблицы —
+алерты пути уведомлений: они `ticket`, но идут и в почту, и в sink.
 Оговорка одна: письма уходят только если окружение задало адреса и SMTP при деплое
 (`ALERT_EMAIL_TO`/`ALERT_EMAIL_FROM`/`SMTP_SMARTHOST`/`SMTP_USERNAME`), иначе в
 маршруте стоят плейсхолдеры `example.invalid` — проверка и диагностика в подразделе
@@ -812,11 +818,11 @@ kube-prometheus-stack.
 
 ### Путь уведомлений
 
-**Статус: реализовано** (Phase 4 плана v1.1). Оба правила живут в
+**Статус: реализовано** (Phase 4 плана v1.1). Все три правила живут в
 `rules/notifications.yaml` и ссылаются на этот подраздел через `runbook_url`; у чарта
 сигнала о полном молчании маршрута нет.
 
-Два правила `rules/notifications.yaml` (группа `demo-alerting-path.heartbeat`) сторожат
+Три правила `rules/notifications.yaml` (группа `demo-alerting-path.heartbeat`) сторожат
 сам путь «Alertmanager → sink», потому что правила чарта
 (`AlertmanagerFailedToSendAlerts`, `AlertmanagerClusterFailedToSendAlerts`) видят
 только ошибки отправки, а не полное молчание маршрута:
@@ -829,6 +835,10 @@ kube-prometheus-stack.
   `alertsink_last_notification_timestamp_seconds == 0`: не пришло ни одного
   уведомления, включая `Watchdog`. Значит, сломан маршрут/конфиг Alertmanager,
   а не доставка конкретного алерта.
+- `AlertSinkTargetMissing` — серии `up{job="alert-sink"}` нет вовсе (`absent()`):
+  удалён `ServiceMonitor` или `Service`, либо sink снят в 0 реплик. Первые два правила
+  в этом случае молчат — им нужна серия, — а `TargetDown` чарта тоже не горит: он ждёт
+  `up == 0`, а не отсутствие цели.
 
 Порядок разбора:
 
@@ -837,26 +847,31 @@ kube-prometheus-stack.
 2. `/timeline` — пусто или старые записи? Пусто при живом sink → маршрут.
 3. `kubectl -n monitoring get alertmanagerconfig`, затем сгенерированный конфиг:
    `kubectl -n monitoring get secret alertmanager-monitoring-kube-prometheus-alertmanager-generated -o jsonpath='{.data.alertmanager\.yaml\.gz}' | base64 -d | gunzip | grep -A3 webhook_configs`
-   — маршрут на месте? В действующем конфиге это дерево: ветка `email` с
-   `continue: true`, ветка `alert-sink` по `severity` и catch-all без матчеров.
+   — маршрут на месте? В действующем конфиге это дерево: ветка `AlertSink.*` → `email`,
+   ветка `email` по `page|critical` (обе с `continue: true`), ветка `alert-sink` по
+   `severity` и catch-all без матчеров.
 4. `alertmanager_config_last_reload_successful{job="monitoring-kube-prometheus-alertmanager"}`
    и лог Alertmanager: при неудачном reload новый конфиг **не применяется**, продолжает
    работать предыдущий — поэтому доставка «как раньше» не означает «конфиг верный».
    Сам факт неудачи пишет `AlertmanagerFailedReload` (critical → e-mail); ошибка на старте
    пода (битый или неполный конфиг) уже роняет Alertmanager целиком.
-5. Состояние самого sink: `up{job="alert-sink"}`, `kubectl -n demo logs deploy/alert-sink`.
+5. Состояние самого sink: `up{job="alert-sink"}`, `kubectl -n demo logs deploy/alert-sink`,
+   `kubectl -n demo get servicemonitor alert-sink -o yaml` (метка `release=monitoring`).
 
 Устройство маршрута и проверка доставки — раздел «Маршрут уведомлений и alert-sink».
 
-**Ограничение этих двух правил:** они идут тем же путём, который сторожат. `severity:
-ticket` → `alert-sink`, а в e-mail уходят только `page|critical`, поэтому при полностью
-сломанном маршруте до sink уведомление о поломке тоже не доедет — сигнал будет виден в
-UI Prometheus (`/alerts`) и Alertmanager, но не в почте. Отдельная ветка
-`alertname=~"AlertSink.*"` → `email` с `continue: true` (независимый канал) — кандидат в
-следующий шаг: она меняет дерево маршрутов и ассерт `check.sh` на три child-route.
-Второе ограничение: пока `alertsink_last_notification_timestamp_seconds` равен 0 (сразу
-после рестарта пода), первое правило слепо, а второму нужен аптайм 5,5 ч — sink, который
-рестартуют чаще, чем раз в 5,5 ч, при сломанном маршруте не репортится вовсе.
+**Куда уходят эти алерты.** Имя каждого правила начинается с `AlertSink`, и в дереве
+маршрутов для `alertname=~"AlertSink.*"` есть отдельная первая ветка → `email` с
+`continue: true`. Без неё `severity: ticket` уводил бы сигнал «маршрут до sink сломан»
+только в сломанный sink, и почта молчала бы вместе с путём. При переименовании правил
+ветку маршрута нужно править вместе с ними — это проверяет `scripts/check.sh`.
+
+**Ограничение, которое стоит знать:** пока `alertsink_last_notification_timestamp_seconds`
+равен 0 (сразу после рестарта пода), `AlertSinkHeartbeatMissing` слепо, а
+`AlertSinkNeverReceived` нужен аптайм 5,5 ч — sink, который рестартуют чаще, чем раз в
+5,5 ч, при сломанном маршруте не репортится. Второе: правила опираются на `Watchdog` от
+чарта; если его выключат или уведут в другой маршрут, `AlertSinkNeverReceived` начнёт
+ложно гореть через 5,5 ч аптайма.
 
 **Гигиена:** силенсы создаются **в UI Alertmanager** (`alertmanager.lab.internal`), не в
 Prometheus: кнопка «Silence» в UI Prometheus ведёт на pod IP, который из браузера не

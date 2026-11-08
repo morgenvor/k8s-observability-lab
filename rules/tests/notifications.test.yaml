@@ -16,7 +16,9 @@
 #  * долгий uptime и gauge = 0 — AlertSinkNeverReceived;
 #  * up == 0 при старом gauge — heartbeat молчит: упавший sink ловят правила чарта;
 #  * up == 0 при gauge = 0 — молчат оба: проверяет ветку up == 1 внутри
-#    AlertSinkNeverReceived (без неё правило загорелось бы на мёртвой цели).
+#    AlertSinkNeverReceived (без неё правило загорелось бы на мёртвой цели);
+#  * серии up нет вовсе — AlertSinkTargetMissing (absent); heartbeat-правила при этом
+#    молчат, хотя их серии на месте: heartbeat сторожит молчание пути, а не пропажу цели.
 rule_files:
   - ../../.tmp/rendered/rulefiles/notifications.yaml
 evaluation_interval: 1m
@@ -38,6 +40,9 @@ tests:
         exp_alerts: []
       - eval_time: 24h
         alertname: AlertSinkNeverReceived
+        exp_alerts: []
+      - eval_time: 24h
+        alertname: AlertSinkTargetMissing
         exp_alerts: []
 
   # --- тишина маршрута при живом sink -----------------------------------------
@@ -182,4 +187,39 @@ tests:
         exp_alerts: []
       - eval_time: 24h
         alertname: AlertSinkHeartbeatMissing
+        exp_alerts: []
+
+  # --- цели нет вовсе: серии up{job="alert-sink"} нет ---------------------------
+  # Метрики самого sink в тесте оставлены живыми: heartbeat-правила при этом молчат
+  # (last_notification свежий, up отсутствует), а срабатывает только absent()-правило.
+  - name: "серии up нет: AlertSinkTargetMissing горит, heartbeat молчит"
+    interval: 1m
+    input_series:
+      - series: 'alertsink_last_notification_timestamp_seconds{job="alert-sink", namespace="demo"}'
+        values: '86000x1441'
+      - series: 'alertsink_process_start_time_seconds{job="alert-sink", namespace="demo"}'
+        values: '64800x1441'
+    alert_rule_test:
+      - eval_time: 24h
+        alertname: AlertSinkTargetMissing
+        exp_alerts:
+          - exp_labels:
+              severity: ticket
+              service: alert-sink
+              namespace: demo
+            exp_annotations:
+              summary: "Путь уведомлений: цели alert-sink нет в Prometheus"
+              description: >-
+                Серии up{job="alert-sink"} нет дольше 10 минут: удалён ServiceMonitor или
+                Service, либо sink снят в 0 реплик. Оба heartbeat-правила в этом случае молчат
+                (им нужна серия), TargetDown чарта — тоже: ему нужен up == 0, а не отсутствие
+                цели. Доставка в sink при этом не наблюдается вовсе, и тишина выглядит как
+                норма. Проверь ServiceMonitor alert-sink (метка release=monitoring),
+                kubectl -n demo get deploy,svc,endpoints и метрики пода.
+              runbook_url: "https://github.com/morgenvor/k8s-observability-lab/blob/main/docs/runbook.md#путь-уведомлений"
+      - eval_time: 24h
+        alertname: AlertSinkHeartbeatMissing
+        exp_alerts: []
+      - eval_time: 24h
+        alertname: AlertSinkNeverReceived
         exp_alerts: []

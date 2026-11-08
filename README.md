@@ -37,13 +37,19 @@ flowchart LR
 
 ```mermaid
 flowchart TD
-  alert["алерт в Alertmanager"] --> severity{"severity"}
-  severity -->|"page, critical"| email["receiver email<br/>SMTP, sendResolved"]
+  alert["алерт в Alertmanager"] --> hb{"alertname =~ AlertSink.*"}
+  hb -->|"да: путь уведомлений"| email["receiver email<br/>SMTP, sendResolved"]
+  hb -->|"нет"| severity{"severity"}
+  severity -->|"page, critical"| email
   severity -->|"ticket, info, warning, none"| sink["receiver alert-sink<br/>webhook → /timeline"]
   severity -->|"catch-all: всё, что не совпало"| sink
+  email -.->|"continue: true"| sink
 ```
 
-Схема соответствует конфигу `deploy/monitoring/alertmanagerconfig.yaml`: `page` и
+Схема соответствует конфигу `deploy/monitoring/alertmanagerconfig.yaml`. Ветка
+`alertname=~"AlertSink.*"` стоит первой и ведёт в `email` с `continue: true`: алерты
+самого пути уведомлений (`rules/notifications.yaml`) имеют `severity: ticket`, и без
+неё сигнал «маршрут до sink сломан» уходил бы только в сломанный sink. Дальше `page` и
 `critical` уходят в `email`, остальные `severity` — в `alert-sink`, а catch-all без
 матчеров страхует неизвестный `severity`. Адреса и SMTP-хост в git — плейсхолдеры
 `example.invalid`: реальные значения подставляет окружение при деплое
@@ -74,7 +80,7 @@ flowchart TD
 | toxiproxy | 2.9.0 | `deploy/base/toxiproxy.yaml` |
 | demo-api, demo-load, alert-sink | node:22.23.4-alpine, тег = короткий SHA | `app/*/Dockerfile` |
 
-Своё: 21 алерт и 20 записывающих правил (41 правило) в 6 `PrometheusRule` (10 групп),
+Своё: 22 алерта и 20 записывающих правил (42 правила) в 6 `PrometheusRule` (10 групп),
 два дашборда (`demo-red`, `slo-demo`), четыре дрилла, офлайн-ворота `./scripts/check.sh`
 (их же запускает CI).
 

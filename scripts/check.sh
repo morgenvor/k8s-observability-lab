@@ -421,29 +421,52 @@ for key, value in expected.items():
         fail(f"route.{key}={route.get(key)!r}, ожидалось {value!r}")
 
 children = route.get("routes") or []
-if len(children) != 3:
+if len(children) != 4:
     fail(
-        f"child-routes родителя: {len(children)}, ожидалось 3"
-        " (e-mail, severity-ветка для остального, catch-all)"
+        f"child-routes родителя: {len(children)}, ожидалось 4"
+        " (heartbeat → e-mail, severity page|critical → e-mail, severity для остального,"
+        " catch-all)"
     )
-email_route, ticket_route, catch_all = children
+heartbeat_route, email_route, ticket_route, catch_all = children
+# Heartbeat-ветка обязана быть первой: алерты AlertSink* имеют severity ticket, и без
+# почты они остаются только в том sink, поломку которого описывают.
+if heartbeat_route.get("receiver") != "email":
+    fail(f"child-routes[0].receiver={heartbeat_route.get('receiver')!r}, ожидался email")
+if heartbeat_route.get("continue") is not True:
+    fail(
+        "child-routes[0] без continue: true — heartbeat-алерт не доедет до sink,"
+        " а /timeline останется без записи о поломке пути"
+    )
+hb_matchers = heartbeat_route.get("matchers") or []
+if len(hb_matchers) != 1:
+    fail(f"child-routes[0].matchers={hb_matchers!r}, ожидался ровно один матчер по alertname")
+hb_only = hb_matchers[0]
+if (hb_only.get("name"), hb_only.get("matchType"), hb_only.get("value")) != (
+    "alertname",
+    "=~",
+    "AlertSink.*",
+):
+    fail(
+        f"child-routes[0]: матчер {hb_only!r},"
+        " ожидался alertname=~'AlertSink.*' (имена правил rules/notifications.yaml)"
+    )
 if email_route.get("receiver") != "email":
-    fail(f"child-routes[0].receiver={email_route.get('receiver')!r}, ожидался email")
+    fail(f"child-routes[1].receiver={email_route.get('receiver')!r}, ожидался email")
 if email_route.get("continue") is not True:
     fail(
-        "child-routes[0] без continue: true — Alertmanager остановится на e-mail-ветке,"
+        "child-routes[1] без continue: true — Alertmanager остановится на e-mail-ветке,"
         " и остальные ветки для этого алерта не рассматриваются"
     )
-if matcher(email_route, "child-routes[0]") != "page|critical":
-    fail(f"child-routes[0]: severity={matcher(email_route, 'child-routes[0]')!r}, ожидалось page|critical")
+if matcher(email_route, "child-routes[1]") != "page|critical":
+    fail(f"child-routes[1]: severity={matcher(email_route, 'child-routes[1]')!r}, ожидалось page|critical")
 if ticket_route.get("receiver") != "alert-sink":
-    fail(f"child-routes[1].receiver={ticket_route.get('receiver')!r}, ожидался alert-sink")
+    fail(f"child-routes[2].receiver={ticket_route.get('receiver')!r}, ожидался alert-sink")
 if ticket_route.get("continue"):
-    fail("child-routes[1] с continue: true — лишняя ветка ниже получит тот же алерт")
-if matcher(ticket_route, "child-routes[1]") != "ticket|info|warning|none":
+    fail("child-routes[2] с continue: true — лишняя ветка ниже получит тот же алерт")
+if matcher(ticket_route, "child-routes[2]") != "ticket|info|warning|none":
     fail(
-        "child-routes[1]: severity="
-        f"{matcher(ticket_route, 'child-routes[1]')!r}, ожидалось ticket|info|warning|none"
+        "child-routes[2]: severity="
+        f"{matcher(ticket_route, 'child-routes[2]')!r}, ожидалось ticket|info|warning|none"
     )
 if catch_all.get("receiver") != "alert-sink":
     fail(f"catch-all.receiver={catch_all.get('receiver')!r}, ожидался alert-sink")

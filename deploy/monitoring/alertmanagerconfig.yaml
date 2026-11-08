@@ -11,7 +11,8 @@ metadata:
 # Маршрут уведомлений демо-контура. Получателей два, и они не взаимоисключающие:
 #   * alert-sink (webhook в namespace demo) — журнал доставленного: /timeline и метрики
 #     alertsink_* служат доказательством в дриллах и страховкой от тихой потери алерта;
-#   * email (SMTP) — человек: туда уходит severity page|critical.
+#   * email (SMTP) — человек: туда уходит severity page|critical, а также алерты самого
+#     пути уведомлений (AlertSink*), у которых severity ticket, — им нужен канал вне sink.
 # Адреса и SMTP-хост в git — плейсхолдеры example.invalid: реальные значения подставляет
 # оверлей при деплое (scripts/lib.sh: render_demo_manifests, env ALERT_EMAIL_TO/
 # ALERT_EMAIL_FROM/SMTP_SMARTHOST/SMTP_USERNAME). Пароль приложения SMTP живёт только в
@@ -22,7 +23,7 @@ metadata:
 spec:
   route:
     # receiver родителя практически не используется: Alertmanager добавляет его к
-    # доставке, только если не совпал НИ ОДИН child. Здесь child 3 — catch-all без
+    # доставке, только если не совпал НИ ОДИН child. Здесь child 4 — catch-all без
     # матчеров, он совпадает всегда, поэтому поле обязательно по схеме, но фактически
     # не срабатывает. Убрать catch-all нельзя (см. ниже) — значит, и полагаться на
     # родителя не нужно.
@@ -34,6 +35,17 @@ spec:
     groupInterval: 30s
     repeatInterval: 4h
     routes:
+      # Ветка heartbeat пути уведомлений — ПЕРВОЙ, раньше severity-веток. Алерты
+      # AlertSink* (rules/notifications.yaml) сообщают, что маршрут до sink сломан;
+      # у них severity ticket, то есть без этой ветки почты не было бы вовсе, и сигнал
+      # о поломке пути умирал бы вместе с путём. continue: true — тем же алертом
+      # пользуется и /timeline, когда sink жив.
+      - receiver: email
+        matchers:
+          - name: alertname
+            value: "AlertSink.*"
+            matchType: "=~"
+        continue: true
       # page|critical — то, из-за чего будят человека: письмо. continue: true
       # обязателен: без него Alertmanager останавливается на первой совпавшей ветке,
       # и остальные (включая catch-all) для этого алерта не рассматриваются.

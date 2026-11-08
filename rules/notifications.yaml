@@ -19,16 +19,21 @@
 # или уведут в другой маршрут, метрика sink перестанет расти и AlertSinkNeverReceived
 # начнёт ложно гореть через 5,5 ч аптайма. При смене repeatInterval порог пересматривается.
 #
-# Что не является инцидентом: остановленная лаба. Оба правила требуют up == 1, а если
-# Prometheus не работает, он и не считает. Падение самого sink (up == 0) ловят правила
-# чарта по цели, а не heartbeat: «sink умер» и «до sink ничего не доходит» — разные
-# отказы, и путать их в одном правиле значит терять диагноз.
+# Что не является инцидентом: остановленная лаба. Оба heartbeat-правила требуют up == 1,
+# а если Prometheus не работает, он и не считает. Падение самого sink (up == 0) ловят
+# правила чарта по цели, а не heartbeat: «sink умер» и «до sink ничего не доходит» —
+# разные отказы, и путать их в одном правиле значит терять диагноз.
 #
-# shortcut: пропажу цели целиком (удалён ServiceMonitor, sink убран в 0 реплик) эти два
-# правила не видят — серии up{job="alert-sink"} тогда нет вовсе, а не 0. Случай закрывает
-# absent()-правило в духе LokiTargetMissing (rules/pipeline.yaml); кандидат в отдельный шаг,
-# см. CHANGELOG фазы 4. До него молчание пути уведомлений при отсутствии цели остаётся
-# незамеченным.
+# Пропажу цели целиком (серии up{job="alert-sink"} нет вовсе: удалён ServiceMonitor,
+# Service или Deployment) не видят ни heartbeat-правила — им нужна серия, — ни TargetDown
+# чарта, которому нужен up == 0. Этот случай закрывает третье правило
+# AlertSinkTargetMissing.
+#
+# Куда уходят эти алерты: у всех трёх severity ticket, но имя начинается с AlertSink, и
+# в deploy/monitoring/alertmanagerconfig.yaml есть отдельная (первая) ветка
+# alertname=~"AlertSink.*" → email с continue: true. Иначе сигнал «маршрут до sink
+# сломан» шёл бы только в сломанный sink. При переименовании правил ветку маршрута
+# нужно править вместе с ними — это проверяет scripts/check.sh.
 apiVersion: monitoring.coreos.com/v1
 kind: PrometheusRule
 metadata:
@@ -98,4 +103,26 @@ spec:
               ошибок нет, потому что отправлять нечего или некуда. Проверь дерево
               маршрутов в активном конфиге Alertmanager, alertmanager_config_last_reload_successful
               и /timeline.
+            runbook_url: "https://github.com/morgenvor/k8s-observability-lab/blob/main/docs/runbook.md#путь-уведомлений"
+
+        # Третий случай — цели нет вовсе. Данные о её отсутствии приходят только от
+        # запроса, а не от серии, поэтому здесь absent(). sum() вокруг absent(): в
+        # Prometheus 3.x absent() возвращает метки равенства из селектора, и без sum()
+        # алерт получил бы лишнюю метку job — тот же приём, что в rules/meta.yaml.
+        - alert: AlertSinkTargetMissing
+          expr: sum(absent(up{job="alert-sink", namespace="demo"})) > 0
+          for: 10m
+          labels:
+            severity: ticket
+            service: alert-sink
+            namespace: demo
+          annotations:
+            summary: "Путь уведомлений: цели alert-sink нет в Prometheus"
+            description: >-
+              Серии up{job="alert-sink"} нет дольше 10 минут: удалён ServiceMonitor или
+              Service, либо sink снят в 0 реплик. Оба heartbeat-правила в этом случае молчат
+              (им нужна серия), TargetDown чарта — тоже: ему нужен up == 0, а не отсутствие
+              цели. Доставка в sink при этом не наблюдается вовсе, и тишина выглядит как
+              норма. Проверь ServiceMonitor alert-sink (метка release=monitoring),
+              kubectl -n demo get deploy,svc,endpoints и метрики пода.
             runbook_url: "https://github.com/morgenvor/k8s-observability-lab/blob/main/docs/runbook.md#путь-уведомлений"
