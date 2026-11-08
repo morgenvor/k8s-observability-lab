@@ -41,7 +41,7 @@
 26 файлов yamllint, 39 правил в 5 файлах, ссылок `runbook_url 19, dashboard_url 6`,
 анкоров в runbook 23. Новые шаги этого прогона — «маршрут уведомлений в рендере»
 (три child-route, `continue`, catch-all, подстановка адресов двумя рендерами) и «скан
-личных адресов» (6 адресов, все в `example.invalid`).
+личных адресов» (10 адресов, все в `example.invalid`).
 
 В песочнице, где шли прогоны, шагам `npm ci` и `docker build` нужны кеши внутри проекта
 (`npm_config_cache`, `DOCKER_CONFIG`) — это ограничение среды, а не проекта.
@@ -82,15 +82,16 @@
 | 2026-11-08 | маршрут по `severity` | сгенерированный конфиг Alertmanager, `/api/v2/alerts`, `/timeline` | дерево доехало: `severity=~"page|critical"` → `email` (`continue: true`), `ticket|info|warning|none` → `alert-sink`, catch-all → `alert-sink`; проба `page` получила получателей `email` + `alert-sink`, проба `ticket` — только `alert-sink` |
 | 2026-11-08 | доставка e-mail | `/metrics` Alertmanager (напрямую из пода), гейт `deploy.sh` | `alertmanager_notifications_total{integration="email"} = 1`, `failed_total{integration="email"}` (все причины) `= 0` — SMTP принял письмо; `alertmanager_config_last_reload_successful = 1` сразу после apply |
 | 2026-11-08 | egress до SMTP | `nc -z <smtp-host> 587` с рабочей машины и из пода Alertmanager | порт открыт в обоих местах; проверено до apply — закрытый egress делает ветку e-mail нерабочей при любом конфиге |
+| 2026-11-08 | вручение письма | скриншот из ящика (`docs/images/alert-email.png`) | письмо получено: в кадре тело уведомления по `page`-пробе, личных адресов нет; снял владелец |
 | 2026-11-08 | доставка в приёмник | `/timeline`, `alertsink_*` | 4 уведомления: 2 × `Watchdog` (`none`), `EmailProbePage` (`page`, пришёл через catch-all), `EmailProbeTicket` (`ticket`) |
 
 ## Ещё не подтверждено живьём
 
 Список ведётся явно, чтобы «написано в коде» не путалось с «проверено на стенде»:
 
-- получение письма в ящике (проверяет владелец, включая «Спам») и скриншот
-  `docs/images/alert-email.png`: отправка подтверждена метриками Alertmanager, вручение
-  письма — только глазами;
+- вручение письма подтверждено скриншотом владельца (`docs/images/alert-email.png`), но
+  не метрикой: «письмо ушло» и «письмо прочитано» — разные события, и SMTP-сервер о втором
+  не сообщает;
 - `resolved`-ветка e-mail/`sendResolved`: проба через `/api/v2/alerts` без `endsAt`
   осталась `active` (снять её нельзя, `DELETE` отдаёт 405; статус пересчитывается только
   при обновлении алерта или сборке мусора), поэтому закрытие письмом этой пробой не

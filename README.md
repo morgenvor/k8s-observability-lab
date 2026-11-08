@@ -48,8 +48,10 @@ flowchart TD
 матчеров страхует неизвестный `severity`. Адреса и SMTP-хост в git — плейсхолдеры
 `example.invalid`: реальные значения подставляет окружение при деплое
 (`ALERT_EMAIL_TO`/`ALERT_EMAIL_FROM`/`SMTP_SMARTHOST`/`SMTP_USERNAME`), иначе письма не
-уходят. Доставка webhook подтверждена живьём (`/timeline`, метрика `alertsink_*`);
-доставка письма живьём ещё не подтверждена — это записано в `docs/verification.md`.
+уходят. Доставка webhook подтверждена живьём (`/timeline`, метрика `alertsink_*`); по e-mail
+подтверждена отправка (`notifications_total{integration="email"}` растёт,
+`failed_total` = 0), а вручение письма в ящик проверяет владелец — это записано в
+`docs/verification.md`.
 
 Почему ветка `email` стоит рядом с явным catch-all: у наших правил `severity ∈
 {page, ticket, info}`, у правил чарта — `critical`/`warning`, у `Watchdog` — `none`.
@@ -130,6 +132,7 @@ export KUBECONFIG=/путь/к/своему/kubeconfig   # или .secrets/kubec
   контейнера с начала, а Loki отбрасывает слишком старые записи (`entry too far behind`) —
   это шум в логах Alloy, а не потеря свежих строк;
 - **e-mail-ветка зависит от SMTP-egress** стенда: при закрытом порту письма не уходят,
-  конфиг при этом остаётся валидным;
+  конфиг при этом остаётся валидным (и `deploy.sh` останавливается, если деплой без
+  e-mail-переменных затёр бы живые адреса плейсхолдерами);
 - домен `*.lab.internal` — **намеренный плейсхолдер**, реальных имён стенда в репозитории
   нет; свои имена задаются в `helm/values/kps.yaml` и `/etc/hosts`.

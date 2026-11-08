@@ -426,10 +426,13 @@ curl -s http://127.0.0.1:9090/api/v1/rules | jq '.data.groups[] | select(.name|s
 
 ```bash
 # применить маршрут (AlertmanagerConfig в monitoring) и сам sink
-kubectl apply -k deploy/monitoring   # полный путь — ./scripts/deploy.sh
+./scripts/deploy.sh      # НЕ `kubectl apply -k deploy/monitoring`: он запишет
+                         # плейсхолдеры example.invalid вместо ваших адресов
 # что реально уехало в Alertmanager: сгенерированный конфиг лежит .gz внутри секрета
+# (в нём открытый пароль SMTP — маскируйте, прежде чем показывать)
 kubectl -n monitoring get secret alertmanager-monitoring-kube-prometheus-alertmanager-generated \
-  -o jsonpath='{.data.alertmanager\.yaml\.gz}' | base64 -d | gunzip | grep -A3 webhook_configs
+  -o jsonpath='{.data.alertmanager\.yaml\.gz}' | base64 -d | gunzip \
+  | sed -E 's/auth_password:.*/auth_password: <скрыт>/' | grep -A3 webhook_configs
 # уведомления, которые дошли до получателя (кольцо последних 200, память пода)
 kubectl -n demo port-forward svc/alert-sink 8080:8080
 #   http://127.0.0.1:8080/timeline — JSON-лента {received_at, status, group_key, alerts}
@@ -452,9 +455,11 @@ kubectl -n demo port-forward svc/alert-sink 8080:8080
   `curl -s <alertmanager>/api/v2/status | jq -r .config.original | grep max_alerts`.
 - Маршрут — дерево, а не один получатель: `severity=~"page|critical"` уходит **и**
   письмом (подраздел «E-mail (SMTP)» ниже), `ticket|info|warning|none` — в `/timeline`.
-  `Watchdog` (`none`) и шум чарта с `warning`/`critical` разбираются штатно по своим
-  веткам, `SloDemoAvailabilityBurnSlow` (`ticket`) — в sink. Шум чарта
-  (`KubeControllerManagerDown` и подобные) — не поломка маршрута, а состояние стенда.
+  `Watchdog` (`none`) разбирается веткой sink, `SloDemoAvailabilityBurnSlow` (`ticket`) —
+  тоже. Алерты `critical` от чарта (например `AlertmanagerFailedReload`) теперь уходят
+  письмом: это отказ компонентов стека, а не шум. `KubeControllerManagerDown`,
+  `KubeSchedulerDown`, `KubeProxyDown` в этом стенде не появляются — компоненты выключены
+  в `helm/values/kps.yaml` (в k3s у них нет своих целей).
 
 ### E-mail (SMTP): page и critical
 
@@ -488,8 +493,11 @@ Catch-all — страховка от нового или отсутствующ
 **Порядок: Secret → конфиг.**
 
 ```bash
+# пароль не набираем в командной строке: она попадает в history и в список процессов
+read -rsp 'пароль приложения SMTP: ' SMTP_PASSWORD && printf '\n'
 kubectl -n monitoring create secret generic alertmanager-smtp \
-  --from-literal=smtp-password='<пароль-приложения>'
+  --from-literal=smtp-password="${SMTP_PASSWORD}"
+unset SMTP_PASSWORD
 export ALERT_EMAIL_TO='alerts@<ваш-домен>'          # ящик человека для page|critical
 export ALERT_EMAIL_FROM='alertmanager@<ваш-домен>'  # обычно = логин SMTP
 export SMTP_SMARTHOST='smtp.yandex.ru:465'
@@ -498,9 +506,14 @@ export SMTP_USERNAME='alertmanager@<ваш-домен>'
 ```
 
 `authPassword` в конфиге — ссылка на Secret `alertmanager-smtp`. Без него оператор не
-соберёт конфиг Alertmanager: правка не применится (доставка молча останется на старом
-конфиге), а при пересоздании пода Alertmanager не смонтирует том. Поэтому
-`scripts/deploy.sh` проверяет Secret до apply и падает с готовой командой создания.
+соберёт конфиг Alertmanager: правка маршрута не применится, а снаружи всё выглядит
+здоровым — старый конфиг продолжает работать. Поэтому `scripts/deploy.sh` проверяет
+Secret до apply и падает с готовой командой создания.
+
+Деплой без четырёх e-mail переменных **останавливается**, если в кластере уже стоят
+живые адреса: `apply` декларативен, и плейсхолдеры `example.invalid` молча заменили бы
+рабочий маршрут. Осознанный переход на плейсхолдеры (например, при сносе ветки) —
+только явно: `ALERT_EMAIL_ALLOW_PLACEHOLDER=1 ./scripts/deploy.sh`.
 
 **Пароль в сгенерированном конфиге лежит открытым текстом.** Оператор не монтирует
 Secret файлом, а подставляет значение в `alertmanager-monitoring-kube-prometheus-alertmanager-generated`
@@ -512,23 +525,26 @@ Secret файлом, а подставляет значение в `alertmanager
 Адреса подставляет оверлей при рендере (`scripts/lib.sh`: JSON6902-патч
 `/spec/receivers/1/emailConfigs/0/{to,from,smarthost,authUsername}`), в git лежат
 плейсхолдеры `example.invalid`. `SMTP_SMARTHOST` валидируется как `host:port`.
-Без переменных `deploy.sh` предупреждает: маршрут валиден, письма не уходят.
+Порт 465 (implicit TLS) и 587 (STARTTLS) поддержаны клиентом Alertmanager; живьём
+проверен только 587 — для 465 нет подтверждения на этом стенде.
 
 **Проверка:**
 
 ```bash
-# 1) Alertmanager принял конфиг — тот же гейт делает deploy.sh после apply
+# 1) маршрут и адреса так, как их видит Alertmanager (это же проверяет гейт deploy.sh:
+#    метрика reload в одиночку ничего не доказывает — она остаётся 1 от прошлого reload)
+kubectl -n monitoring port-forward svc/monitoring-kube-prometheus-alertmanager 9093:9093 &
+curl -s http://127.0.0.1:9093/api/v2/status \
+  | jq -r '.config.original' | sed -E 's/(auth_password:).*/\1 <скрыт>/' | grep -A4 '/email'
+# 2) метрика reload — второй признак
 kubectl -n monitoring port-forward svc/monitoring-kube-prometheus-prometheus 9090:9090 &
 curl -sG http://127.0.0.1:9090/api/v1/query --data-urlencode \
   'query=alertmanager_config_last_reload_successful{job="monitoring-kube-prometheus-alertmanager"}'
-# 2) маршрут и адреса так, как их видит Alertmanager
-kubectl -n monitoring port-forward svc/monitoring-kube-prometheus-alertmanager 9093:9093 &
-curl -s http://127.0.0.1:9093/api/v2/status | jq -r .config.original
 # 3) проба: page уходит письмом, ticket — в /timeline (sink: port-forward 8080)
 curl -s -XPOST http://127.0.0.1:9093/api/v2/alerts -H 'Content-Type: application/json' \
   -d '[{"labels":{"alertname":"EmailProbe","severity":"page","service":"demo-api"},
        "annotations":{"summary":"проверка доставки почты"}}]'
-# 4) ошибки интеграции e-mail
+# 4) ошибки интеграции e-mail — должно быть 0
 curl -sG http://127.0.0.1:9090/api/v1/query --data-urlencode \
   'query=increase(alertmanager_notifications_failed_total{integration="email"}[15m])'
 ```
@@ -536,7 +552,9 @@ curl -sG http://127.0.0.1:9090/api/v1/query --data-urlencode \
 Проба `page` должна появиться и в `/timeline` (catch-all + `continue`), и в ящике —
 проверять оба места: письмо может уйти в «Спам». Снять пробу нельзя: у `/api/v2/alerts`
 нет метода удаления (`DELETE` отвечает 405). Проба без `endsAt` живёт до `resolve_timeout`
-(5m), после чего Alertmanager присылает `resolved` — это заодно проверяет `sendResolved`.
+(5m) и остаётся `active` в API, пока Alertmanager не пересчитает её статус (обновление
+алерта или сборка мусора), — **`resolved`-ветку (`sendResolved`) такой пробой проверить
+нельзя**, её показывает дрилл `run.sh errors` (page-алерт закрывается сам).
 
 **Типовые причины «письма не приходят»:**
 
