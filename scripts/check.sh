@@ -23,6 +23,9 @@ done
 cd "${PROJECT_ROOT}"
 require_tools helm helmfile kubectl kubeconform promtool
 mkdir -p "${PROJECT_ROOT}/.tmp/rendered"
+# Ворота герметичны: экспортированные в шелле SMTP_SMARTHOST/адреса меняли бы рендер
+# (а неверный формат хоста ронял бы прогон). Тестовые значения задаются явно в шагах.
+unset ALERT_EMAIL_TO ALERT_EMAIL_FROM SMTP_SMARTHOST SMTP_USERNAME
 # PyYAML нужен выгрузке правил в формате promtool и подсчёту групп: проверяем
 # сразу, иначе шаг падал бы трейсбеком ModuleNotFoundError на середине прогона.
 need_cmd python3
@@ -349,11 +352,24 @@ printf 'образов с подставленным тегом: %d\n' "${#APP_D
 step "маршрут уведомлений в рендере"
 ROUTE_PLAIN="${PROJECT_ROOT}/.tmp/rendered/route-plain.yaml"
 ROUTE_FILLED="${PROJECT_ROOT}/.tmp/rendered/route-filled.yaml"
+ROUTE_BAD="${PROJECT_ROOT}/.tmp/rendered/route-bad.yaml"
+ROUTE_QUOTED="${PROJECT_ROOT}/.tmp/rendered/route-quoted.yaml"
 ( unset ALERT_EMAIL_TO ALERT_EMAIL_FROM SMTP_SMARTHOST SMTP_USERNAME
   render_demo_manifests ci-route "${ROUTE_PLAIN}" >/dev/null )
 ( export ALERT_EMAIL_TO=page@example.invalid SMTP_SMARTHOST=smtp.example.invalid:587
   render_demo_manifests ci-route "${ROUTE_FILLED}" >/dev/null )
-python3 - "${ROUTE_PLAIN}" "${ROUTE_FILLED}" <<'PY'
+# Значение с пробелом, запятой и угловыми скобками: проверяет, что json.dumps действительно
+# экранирует, а собранный вручную YAML не рвётся на «плохом» адресе.
+( export ALERT_EMAIL_FROM='Alert Manager <alertmanager@example.invalid>, ops'
+  render_demo_manifests ci-route "${ROUTE_QUOTED}" >/dev/null )
+# Негативный прогон: хост без порта обязан упасть. Валидация, проверенная только руками
+# (так было записано в CHANGELOG), пропустила бы опечатку до самого apply.
+if ( export SMTP_SMARTHOST=smtp.example.invalid
+     render_demo_manifests ci-route "${ROUTE_BAD}" ) >/dev/null 2>&1; then
+  die "SMTP_SMARTHOST без порта прошёл рендер: валидация host:port в scripts/lib.sh сломана"
+fi
+[ ! -e "${ROUTE_BAD}" ] || rm -f "${ROUTE_BAD}"
+python3 - "${ROUTE_PLAIN}" "${ROUTE_FILLED}" "${ROUTE_QUOTED}" <<'PY'
 import sys
 
 import yaml
@@ -462,7 +478,18 @@ if email.get("requireTLS") is not True or email.get("sendResolved") is not True:
 if email.get("html"):
     fail("emailConfigs[0].html заполнен: план — только text, без html-вёрстки")
 text = email.get("text") or ""
-missing = [token for token in ("alertname", "severity", "summary", "runbook_url") if token not in text]
+# Проверяем именно ссылки на поля шаблона, а не слова в комментарии: «alertname» есть
+# в любом тексте, а письмо без `.Labels.alertname` бесполезно.
+missing = [
+    token
+    for token in (
+        ".Labels.alertname",
+        ".Labels.severity",
+        ".Annotations.summary",
+        ".Annotations.runbook_url",
+    )
+    if token not in text
+]
 if missing:
     fail(f"emailConfigs[0].text без полей {missing} — в письме не будет {', '.join(missing)}")
 
@@ -485,6 +512,13 @@ for field in ("from", "authUsername"):
             f"задавали только ALERT_EMAIL_TO и SMTP_SMARTHOST, но {field}="
             f"{filled.get(field)!r} — патч задел то, что не передавали"
         )
+
+# Значение с пробелом, запятой и угловыми скобками: YAML не должен развалиться, а строка —
+# обрезаться по первому пробелу при сборке патча.
+quoted = route_spec(sys.argv[3])["receivers"][1]["emailConfigs"][0]
+expected_from = "Alert Manager <alertmanager@example.invalid>, ops"
+if quoted.get("from") != expected_from:
+    fail(f"адрес с пробелом и запятой отрендерился как {quoted.get('from')!r} — экранирование сломано")
 print("ассерты маршрута уведомлений и подстановки адресов: ok")
 PY
 
@@ -764,10 +798,14 @@ seen = 0
 for path in sys.argv[1:]:
     try:
         with open(path, encoding="utf-8", errors="replace") as handle:
-            lines = handle.read().splitlines()
+            text = handle.read()
     except OSError:
         continue
-    for number, line in enumerate(lines, 1):
+    # Бинарные файлы (изображения в docs/images) текстом не разбираем: там случайные
+    # байты, а секретов в картинке скан всё равно не найдёт — её проверяет человек.
+    if "\x00" in text:
+        continue
+    for number, line in enumerate(text.splitlines(), 1):
         for match in ADDRESS.finditer(line):
             seen += 1
             if not ALLOWED.search(match.group(0)):

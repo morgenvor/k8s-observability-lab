@@ -121,8 +121,10 @@ render_demo_manifests() {
   if [ -n "${SMTP_USERNAME:-}" ]; then
     email_patches+=("/spec/receivers/1/emailConfigs/0/authUsername $(json_string "${SMTP_USERNAME}")")
   fi
-  if [ "${#email_patches[@]}" -eq 0 ]; then
-    warn "ALERT_EMAIL_TO/ALERT_EMAIL_FROM/SMTP_SMARTHOST/SMTP_USERNAME не заданы — в маршруте останутся плейсхолдеры example.invalid, письма по page|critical не уйдут"
+  if [ "${#email_patches[@]}" -eq 0 ] && [ -z "${EMAIL_PLACEHOLDER_WARNED:-}" ]; then
+    # Один раз на процесс: deploy/rollback/check рендерят несколько раз подряд.
+    EMAIL_PLACEHOLDER_WARNED=1
+    warn "ALERT_EMAIL_TO/ALERT_EMAIL_FROM/SMTP_SMARTHOST/SMTP_USERNAME не заданы — в маршруте останутся плейсхолдеры example.invalid"
   fi
   local images=()
   local dockerfile
@@ -147,6 +149,7 @@ render_demo_manifests() {
       printf '  - target:\n      group: monitoring.coreos.com\n      version: v1alpha1\n'
       printf '      kind: AlertmanagerConfig\n      name: demo-notifications\n'
       printf '    patch: |-\n'
+      local pair
       for pair in "${email_patches[@]}"; do
         # Значение — последняя часть строки после первого пробела: JSON-литерал
         # может содержать пробелы (например «Имя <адрес>») и не должен резаться.
