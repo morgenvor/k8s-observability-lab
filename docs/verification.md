@@ -63,6 +63,14 @@ catch-all. Те же мутации, что и в предыдущем прог�
 (`vector(1)` и `vector(0)` вместо `absent`) — каждая роняет свой кейс. Чарты снова из
 локальных копий: GitHub отдавал `504` на `releases/download`.
 
+Прогон 2026-11-08 (Phase 5 — Loki ruler): `OK`, пропусков нет; 30 файлов yamllint, 42
+правила в 6 файлах (6 + 20 + 3 + 3 + 3 + 7) плюс правило Loki ruler (его promtool не
+разбирает: `| json` — не PromQL, структуру проверяет шаг «Loki ruler в рендере»), ссылок
+`runbook_url 23, dashboard_url 6` (новый алерт проверяется тем же шагом анкоров), анкоров
+25, `kustomize` 23 объекта, `helmfile template` 134 объекта, пять наборов `promtool test
+rules` — `SUCCESS`. Чарты снова из локальных копий (`.tmp/chart-mirror/`, `sha256` сверены
+с `digest` индексов): GitHub отдавал `503` на `releases/download`.
+
 В песочнице, где шли прогоны, шагам `npm ci` и `docker build` нужны кеши внутри проекта
 (`npm_config_cache`, `DOCKER_CONFIG`) — это ограничение среды, а не проекта.
 
@@ -104,6 +112,8 @@ catch-all. Те же мутации, что и в предыдущем прог�
 | 2026-11-08 | egress до SMTP | `nc -z <smtp-host> 587` с рабочей машины и из пода Alertmanager | порт открыт в обоих местах; проверено до apply — закрытый egress делает ветку e-mail нерабочей при любом конфиге |
 | 2026-11-08 | вручение письма | скриншот из ящика (`docs/images/alert-email.png`) | письмо получено: в кадре тело уведомления по `page`-пробе, личных адресов нет; снял владелец |
 | 2026-11-08 | доставка в приёмник | `/timeline`, `alertsink_*` | 4 уведомления: 2 × `Watchdog` (`none`), `EmailProbePage` (`page`, пришёл через catch-all), `EmailProbeTicket` (`ticket`) |
+| 2026-11-08 | Loki ruler: загрузка правила | `helmfile apply -l name=loki` (ревизия 4), `/prometheus/api/v1/rules` Loki (порт 3100) | группа `demo-api-logs`, файл `demo-api-5xx.yaml`, `interval: 60`, правило `DemoApi5xxFromLogs` `health: ok`, метки `severity=ticket`, `service=demo-api`; рестарт пода Loki прошёл без ошибок старта |
+| 2026-11-08 | Loki ruler: оценка и путь до Alertmanager | `/metrics` Loki, `/config` Loki | `loki_prometheus_rule_evaluations_total{rule_group="…;demo-api-logs"} = 2`, `…_failures_total = 0`; `ruler.alertmanager_url` = Service Alertmanager, `enable_api: true`, `storage.local.directory: /etc/loki/rules`, `rule_path: /tmp/loki-rules`; `loki_prometheus_notifications_alertmanagers_discovered{alertmanager="…/api/v2/alerts"} = 1`, `sent_total = 0` (гореть нечему) |
 
 ## Ещё не подтверждено живьём
 
@@ -117,7 +127,14 @@ catch-all. Те же мутации, что и в предыдущем прог�
   при обновлении алерта или сборке мусора), поэтому закрытие письмом этой пробой не
   проверено — его покажет ближайший дрилл;
 - heartbeat пути уведомлений (правила `AlertSinkHeartbeatMissing`, `AlertSinkNeverReceived`);
-- правило Loki ruler `DemoApi5xxFromLogs`: `firing` в дрилле `errors` и молчание в `latency`;
+- правило Loki ruler `DemoApi5xxFromLogs`: загрузка правила, его оценка и обнаружение
+  Alertmanager подтверждены 2026-11-08 (см. таблицу выше), а `firing` и доставка в sink —
+  нет. Дрилл `errors` для этого не годится: `reset_peer` на toxiproxy рвёт соединение
+  **до** приложения, поэтому в логах demo-api остаются `http_request` со `status: 200` и
+  `request_aborted` (499), а строк с `status >= 500` не появляется. Нужен отдельный
+  способ: синтетическая строка `{"msg":"http_request","status":500}` в
+  `{namespace="demo", app="demo-api"}` через `/loki/api/v1/push` (проверяет ruler →
+  Alertmanager → sink, не трогая приложение) либо отдельная инъекция 5xx в demo-api;
 - `stage.drop` Alloy: отсутствие `entry too far behind` после рестарта и рост счётчика
   отброшенных строк;
 - замер `retentionSize` TSDB (оставить 5 GB или понизить);
