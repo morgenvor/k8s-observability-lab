@@ -401,8 +401,8 @@ curl -s http://127.0.0.1:9090/api/v1/rules | jq '.data.groups[] | select(.name|s
     | jq -r '.data.result[].metric.rule_group'
   ```
 
-  Ожидается 9 групп (две `demo-slo`, две `demo-slo-alerts`, две `demo-infra`,
-  `demo-meta.pipeline`, две `demo-logs-pipeline`). Если правило горит — группа
+  Ожидается 10 групп (две `demo-slo`, две `demo-slo-alerts`, две `demo-infra`,
+  `demo-meta.pipeline`, две `demo-logs-pipeline`, `demo-alerting-path.heartbeat`). Если правило горит — группа
   `demo-slo-alerts` не загрузилась или падает: смотри `/api/v1/rules` и `lastError`,
   метку `release=monitoring` у PrometheusRule `demo-slo-alerts`. `scripts/deploy.sh`
   проверяет тот же селектор сразу после apply, чтобы неверный формат метки не дал
@@ -812,13 +812,12 @@ kube-prometheus-stack.
 
 ### Путь уведомлений
 
-**Статус: не реализовано.** Правил ниже ещё нет в наборе — файл
-`rules/notifications.yaml` появится в Phase 4 плана v1.1; до этого на этот подраздел не
-ссылается ни один `runbook_url`. Раздел описывает, что именно будет сторожить этот путь
-и как его проверять уже сейчас: сигнала о полном молчании маршрута у чарта нет.
+**Статус: реализовано** (Phase 4 плана v1.1). Оба правила живут в
+`rules/notifications.yaml` и ссылаются на этот подраздел через `runbook_url`; у чарта
+сигнала о полном молчании маршрута нет.
 
-Два правила `rules/notifications.yaml` (группа `demo-alerting-path.heartbeat`) будут
-сторожить сам путь «Alertmanager → sink», потому что правила чарта
+Два правила `rules/notifications.yaml` (группа `demo-alerting-path.heartbeat`) сторожат
+сам путь «Alertmanager → sink», потому что правила чарта
 (`AlertmanagerFailedToSendAlerts`, `AlertmanagerClusterFailedToSendAlerts`) видят
 только ошибки отправки, а не полное молчание маршрута:
 

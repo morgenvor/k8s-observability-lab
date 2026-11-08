@@ -1,0 +1,87 @@
+# Heartbeat пути уведомлений (фаза 4 плана v1.1).
+#
+# Зачем это нужно. Все остальные правила проекта сторожат сервис и мониторинг, но не
+# сам путь «Prometheus → Alertmanager → sink»: если маршрут перестанет доводить
+# уведомления, дашборды останутся зелёными, а алертов не будет по определению.
+# Чарт это не закрывает: AlertmanagerFailedToSendAlerts и
+# AlertmanagerClusterFailedToSendAlerts горят на ОШИБКАХ отправки, а при потерянном
+# receiver, сломанном конфиге или пустом дереве маршрутов ошибок нет — есть тишина.
+# Поэтому здесь свои правила (дубля с чартом нет: на ошибки доставки своих не пишем).
+#
+# Опорный сигнал — watchdog от чарта: алерт Watchdog (severity=none) всегда firing и
+# уходит в sink каждые repeatInterval = 4h (общий параметр маршрута в
+# deploy/monitoring/alertmanagerconfig.yaml). Sink хранит время последнего принятого
+# уведомления в alertsink_last_notification_timestamp_seconds. Порог 5,5 ч (19800 с) =
+# 4 ч повторного интервала + запас на groupWait/повторную доставку.
+#
+# Что не является инцидентом: остановленная лаба. Оба правила требуют up == 1, а если
+# Prometheus не работает, он и не считает. Падение самого sink (up == 0) ловят правила
+# чарта по цели, а не heartbeat: «sink умер» и «до sink ничего не доходит» — разные
+# отказы, и путать их в одном правиле значит терять диагноз.
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: demo-alerting-path
+  namespace: monitoring
+  labels:
+    release: monitoring
+    app.kubernetes.io/name: demo-alerting-path
+    app.kubernetes.io/part-of: k8s-observability-lab
+spec:
+  groups:
+    - name: demo-alerting-path.heartbeat
+      rules:
+        # Gauge > 0 — защита от ложного срабатывания сразу после рестарта пода:
+        # на старте счётчик времени равен 0, и без этой ветки правило считало бы
+        # «последнее уведомление было в 1970 году». С 0 разбирается следующее правило.
+        - alert: AlertSinkHeartbeatMissing
+          expr: |
+            (alertsink_last_notification_timestamp_seconds > 0)
+            and
+            (time() - alertsink_last_notification_timestamp_seconds > 19800)
+            and on()
+            (up{job="alert-sink"} == 1)
+          for: 10m
+          labels:
+            severity: ticket
+            service: alert-sink
+            namespace: demo
+          annotations:
+            summary: "Путь уведомлений: sink молчит дольше 5,5 ч"
+            description: >-
+              alert-sink жив, но последнее уведомление он принял больше 5,5 часов назад.
+              Watchdog от чарта (всегда firing, repeatInterval 4h) обязан приходить в sink
+              чаще, поэтому тишина означает, что уведомления не доезжают. Ошибок отправки
+              при этом может не быть вовсе: AlertmanagerFailedToSendAlerts и
+              AlertmanagerClusterFailedToSendAlerts видят только неудачную отправку, а не
+              потерянный receiver или пустое дерево маршрутов. Проверь /timeline, активный
+              конфиг Alertmanager и лог sink.
+            runbook_url: "https://github.com/morgenvor/k8s-observability-lab/blob/main/docs/runbook.md#путь-уведомлений"
+
+        # Второй случай: gauge так и остался 0, то есть уведомлений не было НИ ОДНОГО
+        # (включая Watchdog). Смотрим на uptime процесса, а не на время с рестарта
+        # пода: gauge процесса экспортирует сам sink и он же служит признаком «правило
+        # молчит, потому что нечего было запоминать».
+        - alert: AlertSinkNeverReceived
+          expr: |
+            (up{job="alert-sink"} == 1)
+            and
+            (time() - alertsink_process_start_time_seconds > 19800)
+            and
+            (alertsink_last_notification_timestamp_seconds == 0)
+          for: 10m
+          labels:
+            severity: ticket
+            service: alert-sink
+            namespace: demo
+          annotations:
+            summary: "Путь уведомлений: sink жив, но не получил ни одного уведомления"
+            description: >-
+              alert-sink работает дольше 5,5 часов, но не принял ни одного уведомления —
+              даже Watchdog от чарта, который всегда firing и повторяется раз в 4 часа.
+              Значит, сломан маршрут или конфиг Alertmanager: уведомления не доходят до
+              sink вовсе. Это не ошибка отправки (её видят правила чарта), а её отсутствие:
+              ошибок нет, потому что отправлять нечего или некуда. Проверь дерево
+              маршрутов в активном конфиге Alertmanager, alertmanager_config_last_reload_successful
+              и /timeline.
+            runbook_url: "https://github.com/morgenvor/k8s-observability-lab/blob/main/docs/runbook.md#путь-уведомлений"
