@@ -339,6 +339,155 @@ if grep -qE 'image: [^ "]*:local$' "${OVERLAY_RENDER}"; then
 fi
 printf 'образов с подставленным тегом: %d\n' "${#APP_DOCKERFILES[@]}"
 
+# --- 4c. Маршрут уведомлений: severity -> e-mail/alert-sink -------------------
+# kubeconform схему AlertmanagerConfig не знает (--ignore-missing-schemas), а вложенные
+# child-routes в CRD объявлены как preserve-unknown-fields — то есть структуру маршрута
+# офлайн не проверяет никто, кроме этого шага. Цена ошибки высокая: кривой конфиг
+# останавливает ВСЮ доставку, включая приёмник, и молчание выглядит как «всё хорошо».
+# Патч адресов проверяется двумя рендерами: с env (значения подставлены) и без него
+# (в выводе плейсхолдеры) — иначе подстановка могла бы молча бить в чужой receiver.
+step "маршрут уведомлений в рендере"
+ROUTE_PLAIN="${PROJECT_ROOT}/.tmp/rendered/route-plain.yaml"
+ROUTE_FILLED="${PROJECT_ROOT}/.tmp/rendered/route-filled.yaml"
+( unset ALERT_EMAIL_TO ALERT_EMAIL_FROM SMTP_SMARTHOST SMTP_USERNAME
+  render_demo_manifests ci-route "${ROUTE_PLAIN}" >/dev/null )
+( export ALERT_EMAIL_TO=page@example.invalid SMTP_SMARTHOST=smtp.example.invalid:587
+  render_demo_manifests ci-route "${ROUTE_FILLED}" >/dev/null )
+python3 - "${ROUTE_PLAIN}" "${ROUTE_FILLED}" <<'PY'
+import sys
+
+import yaml
+
+PLACEHOLDER = {
+    "to": "alerts@example.invalid",
+    "from": "alertmanager@example.invalid",
+    "smarthost": "smtp.example.invalid:587",
+    "authUsername": "alertmanager",
+}
+
+
+def fail(message):
+    sys.exit(message)
+
+
+def route_spec(path):
+    for doc in yaml.safe_load_all(open(path, encoding="utf-8")):
+        if (
+            isinstance(doc, dict)
+            and doc.get("kind") == "AlertmanagerConfig"
+            and (doc.get("metadata") or {}).get("name") == "demo-notifications"
+        ):
+            return doc["spec"]
+    fail(f"{path}: в рендере нет AlertmanagerConfig demo-notifications")
+
+
+def matcher(route, where):
+    found = route.get("matchers")
+    if not found or len(found) != 1:
+        fail(f"{where}: matchers={found!r}, ожидался ровно один матчер по severity")
+    only = found[0]
+    if only.get("name") != "severity" or only.get("matchType") != "=~":
+        fail(f"{where}: матчер {only!r}, ожидался name=severity matchType=~")
+    return only.get("value")
+
+
+spec = route_spec(sys.argv[1])
+route = spec.get("route") or {}
+expected = {
+    "receiver": "alert-sink",
+    "groupBy": ["alertname", "service"],
+    "groupWait": "10s",
+    "groupInterval": "30s",
+    "repeatInterval": "4h",
+}
+for key, value in expected.items():
+    if route.get(key) != value:
+        fail(f"route.{key}={route.get(key)!r}, ожидалось {value!r}")
+
+children = route.get("routes") or []
+if len(children) != 3:
+    fail(
+        f"child-routes родителя: {len(children)}, ожидалось 3"
+        " (e-mail, severity-ветка для остального, catch-all)"
+    )
+email_route, ticket_route, catch_all = children
+if email_route.get("receiver") != "email":
+    fail(f"child-routes[0].receiver={email_route.get('receiver')!r}, ожидался email")
+if email_route.get("continue") is not True:
+    fail(
+        "child-routes[0] без continue: true — Alertmanager остановится на e-mail-ветке,"
+        " и остальные ветки для этого алерта не рассматриваются"
+    )
+if matcher(email_route, "child-routes[0]") != "page|critical":
+    fail(f"child-routes[0]: severity={matcher(email_route, 'child-routes[0]')!r}, ожидалось page|critical")
+if ticket_route.get("receiver") != "alert-sink":
+    fail(f"child-routes[1].receiver={ticket_route.get('receiver')!r}, ожидался alert-sink")
+if ticket_route.get("continue"):
+    fail("child-routes[1] с continue: true — лишняя ветка ниже получит тот же алерт")
+if matcher(ticket_route, "child-routes[1]") != "ticket|info|warning|none":
+    fail(
+        "child-routes[1]: severity="
+        f"{matcher(ticket_route, 'child-routes[1]')!r}, ожидалось ticket|info|warning|none"
+    )
+if catch_all.get("receiver") != "alert-sink":
+    fail(f"catch-all.receiver={catch_all.get('receiver')!r}, ожидался alert-sink")
+if catch_all.get("matchers"):
+    fail(
+        f"catch-all с матчерами {catch_all.get('matchers')!r} — неизвестный severity"
+        " уйдёт в null-получатель и исчезнет молча"
+    )
+
+receivers = spec.get("receivers") or []
+names = [r.get("name") for r in receivers]
+if names != ["alert-sink", "email"]:
+    fail(
+        f"receivers: {names}, ожидалось ['alert-sink', 'email'] —"
+        " от индекса 1 зависит патч адресов в scripts/lib.sh"
+    )
+configs = receivers[1].get("emailConfigs") or []
+if len(configs) != 1:
+    fail(f"receivers[1].emailConfigs: {len(configs)}, ожидался один")
+email = configs[0]
+password = email.get("authPassword") or {}
+if password.get("name") != "alertmanager-smtp" or password.get("key") != "smtp-password":
+    fail(
+        f"authPassword={password!r}, ожидался Secret alertmanager-smtp ключ smtp-password"
+        " (docs/runbook.md, «Маршрут уведомлений»)"
+    )
+if email.get("requireTLS") is not True or email.get("sendResolved") is not True:
+    fail(
+        "emailConfigs[0]: requireTLS/sendResolved не true — письмо уйдёт без STARTTLS"
+        " или о закрытии алерта не будет уведомления"
+    )
+if email.get("html"):
+    fail("emailConfigs[0].html заполнен: план — только text, без html-вёрстки")
+text = email.get("text") or ""
+missing = [token for token in ("alertname", "severity", "summary", "runbook_url") if token not in text]
+if missing:
+    fail(f"emailConfigs[0].text без полей {missing} — в письме не будет {', '.join(missing)}")
+
+for field, value in PLACEHOLDER.items():
+    if email.get(field) != value:
+        fail(
+            f"базовый рендер: emailConfigs[0].{field}={email.get(field)!r},"
+            f" ожидался плейсхолдер {value!r} (реальные значения подставляет оверлей)"
+        )
+
+filled_spec = route_spec(sys.argv[2])
+filled = filled_spec["receivers"][1]["emailConfigs"][0]
+if filled.get("to") != "page@example.invalid":
+    fail(f"с ALERT_EMAIL_TO рендер дал to={filled.get('to')!r} — патч не доехал до receivers[1]")
+if filled.get("smarthost") != "smtp.example.invalid:587":
+    fail(f"с SMTP_SMARTHOST рендер дал smarthost={filled.get('smarthost')!r}, ожидалось smtp.example.invalid:587")
+for field in ("from", "authUsername"):
+    if filled.get(field) != PLACEHOLDER[field]:
+        fail(
+            f"задавали только ALERT_EMAIL_TO и SMTP_SMARTHOST, но {field}="
+            f"{filled.get(field)!r} — патч задел то, что не передавали"
+        )
+print("ассерты маршрута уведомлений и подстановки адресов: ok")
+PY
+
 # --- 5. Правила Prometheus: синтаксис и юнит-тесты ---------------------------
 # promtool не умеет читать PrometheusRule CRD («field apiVersion not found in type
 # rulefmt.RuleGroups»), а правила обязаны быть CRD: оператор находит их по метке
@@ -593,6 +742,45 @@ case "${scan_rc}" in
   1) : ;; # совпадений нет — норма
   *) die "скан секретов не выполнился (grep вернул ${scan_rc}), см. ${SCAN_OUT}" ;;
 esac
+
+# --- 8a. Личные адреса: в публикуемом наборе только example.invalid/example.com --
+# Правило 4 AGENTS: реальный адрес получателя — такой же секрет, как IP стенда.
+# Домены example.* зарезервированы RFC 2606 и намеренно остаются в файлах как
+# плейсхолдеры (README прямо это объясняет). Регэксп требует точку в домене и
+# пишется с классом [@]: широкий вариант ловил бы scoped-пакеты (@types/node) и
+# находил бы сам себя в этом файле. Строки с адресами не печатаем — печатаем файл.
+step "скан личных адресов"
+python3 - "${SCAN_FILES[@]}" <<'PY'
+import re
+import sys
+
+# Адрес: local-part@домен с хотя бы одной точкой. Домен без точки (scoped-пакет,
+# digest @sha256) адресом не считается.
+ADDRESS = re.compile(r"[A-Za-z0-9._%+-]+[@][A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+")
+ALLOWED = re.compile(r"[@](?:example[.]invalid|example[.]com)$", re.IGNORECASE)
+
+bad = []
+seen = 0
+for path in sys.argv[1:]:
+    try:
+        with open(path, encoding="utf-8", errors="replace") as handle:
+            lines = handle.read().splitlines()
+    except OSError:
+        continue
+    for number, line in enumerate(lines, 1):
+        for match in ADDRESS.finditer(line):
+            seen += 1
+            if not ALLOWED.search(match.group(0)):
+                bad.append(f"{path}:{number}")
+if bad:
+    for where in bad:
+        print(f"  {where}", file=sys.stderr)
+    sys.exit(
+        f"найдено адресов вне example.invalid/example.com: {len(bad)}"
+        " (файл:строка выше; реальный адрес подставляет окружение, в git только плейсхолдер)"
+    )
+print(f"адреса в публикуемом наборе: {seen}, все в example.invalid/example.com")
+PY
 
 # --- Итог -------------------------------------------------------------------
 if [ "${#SKIPPED[@]}" -gt 0 ]; then

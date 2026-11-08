@@ -4,7 +4,9 @@
 # PrometheusRule с правилами SLI/SLO, инфраструктурными и мета-алертами).
 # Использование: ./scripts/deploy.sh
 # Env: IMAGE_TAG (иначе короткий git SHA), KUBECONFIG (иначе kubeconfig лабы),
-#      WAIT_TARGETS (секунды ожидания targets, по умолчанию 180)
+#      WAIT_TARGETS (секунды ожидания targets, по умолчанию 180),
+#      ALERT_EMAIL_TO/ALERT_EMAIL_FROM/SMTP_SMARTHOST/SMTP_USERNAME (адреса и SMTP
+#      для ветки e-mail; без них в маршруте останутся плейсхолдеры example.invalid)
 set -euo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
@@ -20,6 +22,26 @@ WAIT_TARGETS="${WAIT_TARGETS:-180}"
 case "${WAIT_TARGETS}" in
   ''|*[!0-9]*) die "WAIT_TARGETS='${WAIT_TARGETS}' не число секунд (ожидается целое, например 180)" ;;
 esac
+
+# Маршрут v1.1: page|critical уходит письмом. В git лежат плейсхолдеры example.invalid,
+# поэтому деплой без env оставит доставку человеку нерабочей — сообщаем заранее, чтобы
+# «письма не приходят» не искали под чайником в Alertmanager.
+EMAIL_UNSET=()
+for email_var in ALERT_EMAIL_TO ALERT_EMAIL_FROM SMTP_SMARTHOST SMTP_USERNAME; do
+  [ -n "${!email_var:-}" ] || EMAIL_UNSET+=("${email_var}")
+done
+if [ "${#EMAIL_UNSET[@]}" -gt 0 ]; then
+  warn "не заданы ${EMAIL_UNSET[*]}: в маршруте останутся плейсхолдеры example.invalid, письма по page|critical не уйдут (см. docs/runbook.md, «Маршрут уведомлений»)"
+fi
+# Secret с паролем приложения обязан существовать ДО apply: emailConfigs ссылается на
+# него через authPassword, и без секрета оператор не соберёт конфиг Alertmanager. Тогда
+# правка маршрута не применится молча (гейт reload этого не увидит — старый конфиг
+# останется рабочим), а вот пересоздание пода Alertmanager с несуществующим томом
+# оставило бы стенд вообще без доставки. Поэтому проверка — до рендера и apply.
+if [ -n "${SMTP_SMARTHOST:-}" ] || [ -n "${ALERT_EMAIL_TO:-}" ]; then
+  kubectl -n monitoring get secret alertmanager-smtp >/dev/null 2>&1 \
+    || die "нет Secret monitoring/alertmanager-smtp — сначала создай его (порядок важен: Secret -> конфиг): kubectl -n monitoring create secret generic alertmanager-smtp --from-literal=smtp-password=<пароль-приложения>"
+fi
 
 # Тег = git SHA, поэтому после нового коммита старых образов для деплоя уже нет.
 # Без этой проверки apply прошёл бы, а поды ушли в ImagePullBackOff (registry нет).
@@ -103,6 +125,25 @@ done
 awk -v a="${ok_rate:-0}" 'BEGIN{exit !(a > 0)}' \
   || die "нагрузка не доходит до demo-api: rate(load_requests_total{outcome=\"ok\"}) = ${ok_rate:-0}; проверь toxiproxy (прокси demo-api:12001 → demo-api:8080) и TARGET_URL"
 info "цели живы (demo-api ${api_up}, demo-load ${load_up}, alert-sink ${sink_up}), ok-трафик ${ok_rate} rps"
+
+# Гейт reload конфига Alertmanager. Ошибочный AlertmanagerConfig не применяется: доставка
+# продолжает работать по СТАРОМУ конфигу, и внешне всё выглядит здоровым — ни один алерт
+# не скажет, что правка маршрута не доехала. `alertmanager_config_last_reload_successful`
+# = 0 — единственный дешёвый признак этого, поэтому проверяем сразу после apply (оператору
+# нужно время пересобрать секрет и SIGHUP-нуть Alertmanager, отсюда ожидание).
+info "гейт reload конфига Alertmanager (до 60 с)"
+reload_ok=""
+reload_deadline=$((SECONDS + 60))
+while [ "${SECONDS}" -lt "${reload_deadline}" ]; do
+  reload_ok="$(prom_scalar 'min(alertmanager_config_last_reload_successful{job="monitoring-kube-prometheus-alertmanager"})')"
+  if [ "${reload_ok:-0}" = "1" ]; then
+    break
+  fi
+  sleep 5
+done
+[ "${reload_ok:-0}" = "1" ] \
+  || die "alertmanager_config_last_reload_successful=${reload_ok:-нет данных}: новый AlertmanagerConfig не загрузился (доставка идёт по старому конфигу). Смотри лог Alertmanager и /api/v2/status; частая причина — Secret alertmanager-smtp или синтаксис маршрута"
+info "Alertmanager принял конфиг (reload успешен)"
 
 # Правила приезжают тем же apply, но подхватывает их оператор: без этой проверки
 # PrometheusRule без метки release=monitoring или с падающей группой доехал бы

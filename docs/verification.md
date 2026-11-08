@@ -78,9 +78,10 @@
 
 Список ведётся явно, чтобы «написано в коде» не путалось с «проверено на стенде»:
 
-- доставка `page` в почтовый ящик и `ticket` в `/timeline` по маршруту v1.1: ветки `email`
-  в конфиге ещё нет — `deploy/monitoring/alertmanagerconfig.yaml` описывает один receiver
-  `alert-sink` без матчеров, маршрут по `severity` появляется в Phase 3 плана v1.1;
+- доставка `page` в почтовый ящик и `ticket` в `/timeline` по маршруту v1.1: ветки
+  `email` и catch-all в конфиге есть (`deploy/monitoring/alertmanagerconfig.yaml`,
+  Phase 3 плана v1.1), но живой прогон требует SMTP-аккаунта и открытого egress
+  465/587 со стенда — письмо и `/timeline` ещё не сверяли;
 - heartbeat пути уведомлений (правила `AlertSinkHeartbeatMissing`, `AlertSinkNeverReceived`);
 - правило Loki ruler `DemoApi5xxFromLogs`: `firing` в дрилле `errors` и молчание в `latency`;
 - `stage.drop` Alloy: отсутствие `entry too far behind` после рестарта и рост счётчика

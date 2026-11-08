@@ -8,21 +8,18 @@ metadata:
   labels:
     app.kubernetes.io/name: demo-notifications
     app.kubernetes.io/part-of: k8s-observability-lab
-# Маршрут уведомлений демо-контура: всё, что сгенерировал Alertmanager, уходит в
-# alert-sink (webhook в namespace demo). Email/SMTP и секретов нет намеренно —
-# получателя в проекте изображает сервис, а не человек.
-#
-# Маршрут ОДИН и без матчеров: severity доставку не разветвляет. Это осознанно для
-# v1.0 (получатель один): у наших правил severity ∈ {page, ticket, info}, у правил
-# чарта — critical/warning, у Watchdog — none. Матчеры по severity без явного
-# catch-all child-route отрезали бы Watchdog и алерты чарта (несовпавшая ветка уходит
-# к null-получателю). Разветвление — v1.1 вместе с Telegram.
+# Маршрут уведомлений демо-контура. Получателей два, и они не взаимоисключающие:
+#   * alert-sink (webhook в namespace demo) — журнал доставленного: /timeline и метрики
+#     alertsink_* служат доказательством в дриллах и страховкой от тихой потери алерта;
+#   * email (SMTP) — человек: туда уходит severity page|critical.
+# Адреса и SMTP-хост в git — плейсхолдеры example.invalid: реальные значения подставляет
+# оверлей при деплое (scripts/lib.sh: render_demo_manifests, env ALERT_EMAIL_TO/
+# ALERT_EMAIL_FROM/SMTP_SMARTHOST/SMTP_USERNAME). Пароль приложения SMTP живёт только в
+# Secret alertmanager-smtp; в манифесте и репозитории его нет.
 #
 # Поля CRD camelCase (groupBy/groupWait/...), а не snake_case из плана: так описана
 # схема AlertmanagerConfig, и оператор читает именно её.
 spec:
-  # Пустых матчеров нет: маршрут ловит все алерты, включая Watchdog чарта — он же
-  # и служит доказательством, что доставка работает end-to-end.
   route:
     receiver: alert-sink
     # service есть у SLO-алертов, у инфраструктурных его нет: группировка по
@@ -31,7 +28,29 @@ spec:
     groupWait: 10s
     groupInterval: 30s
     repeatInterval: 4h
+    routes:
+      # page|critical — то, из-за чего будят человека: письмо. continue: true
+      # обязателен: без него Alertmanager останавливается на первой совпавшей ветке,
+      # и остальные (включая catch-all) для этого алерта не рассматриваются.
+      - receiver: email
+        matchers:
+          - name: severity
+            value: "page|critical"
+            matchType: "=~"
+        continue: true
+      # ticket|info|warning|none — рабочее время: остаётся в /timeline.
+      - receiver: alert-sink
+        matchers:
+          - name: severity
+            value: "ticket|info|warning|none"
+            matchType: "=~"
+      # Явный catch-all без матчеров: любой новый или неожиданный severity (и алерт
+      # вообще без этой метки) всё равно попадает в приёмник. Без этой ветки
+      # несовпавший алерт ушёл бы в null-получатель и исчез молча.
+      - receiver: alert-sink
   receivers:
+    # Индекс 0 и имя alert-sink не меняются: на них рассчитывает второй аргумент
+    # в оверлее адресов (scripts/lib.sh патчит /spec/receivers/1/...) и scripts/check.sh.
     - name: alert-sink
       webhookConfigs:
         - url: http://alert-sink.demo.svc.cluster.local:8080/webhook
@@ -43,3 +62,35 @@ spec:
           # бесконечно — группа не попала бы в /timeline никогда. Ограничение здесь
           # оставляет шанс, что усечённая группа дойдёт (флаг truncated_alerts).
           maxAlerts: 50
+    # Индекс 1 — email: именно сюда бьёт JSON6902-патч адресов. Порядок receivers
+    # проверяется офлайн (scripts/check.sh), иначе патч ушёл бы в чужой получатель.
+    - name: email
+      emailConfigs:
+        # Плейсхолдеры: заполнены всегда, чтобы конфиг был валиден для Alertmanager
+        # (обязательность to/from/smarthost в CRD не выражена, но Alertmanager без них
+        # письмо не отправит). Реальные значения — из env при деплое.
+        - to: "alerts@example.invalid"
+          from: "alertmanager@example.invalid"
+          smarthost: "smtp.example.invalid:587"
+          authUsername: "alertmanager"
+          # SecretKeySelector: оператор монтирует ключ секрета файлом, пароль в
+          # манифесте не появляется. Secret создаётся ДО применения конфига
+          # (docs/runbook.md, «Маршрут уведомлений»): без него оператор не соберёт
+          # конфиг и встанет вся доставка, включая sink.
+          authPassword:
+            name: alertmanager-smtp
+            key: smtp-password
+          # STARTTLS обязателен: Go-клиент Alertmanager не умеет plaintext-SMTP,
+          # а requireTLS: false дал бы только отсрочку — порт 587 без STARTTLS
+          # отвергнет письмо на стороне провайдера.
+          requireTLS: true
+          sendResolved: true
+          # Только text, без html: письмо уходит multipart/alternative, экранирование
+          # html не нужно, а битая вёрстка — лишний повод не верить уведомлению.
+          # Плейсхолдеры шаблона разрешает Alertmanager на этапе отправки.
+          text: |
+            {{ range .Alerts }}{{ .Status | toUpper }} [{{ .Labels.severity }}] {{ .Labels.alertname }}
+            {{ .Annotations.summary }}
+            {{ with .Annotations.runbook_url }}runbook: {{ . }}{{ end }}
+            {{ end }}
+            Стенд: {{ .ExternalURL }}

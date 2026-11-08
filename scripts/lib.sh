@@ -82,13 +82,48 @@ default_kubeconfig() {
   die "нет kubeconfig: задай KUBECONFIG или положи файл в .secrets/kubeconfig (каталог вне git; см. docs/runbook.md, «Как адаптировать»)"
 }
 
+# Строковый литерал в стиле JSON: и для JSON6902-патча, и как YAML-скаляр он
+# годится без дополнительного экранирования, а bash-кавычки в значениях (адрес с
+# запятой, пробелом) ломают ручную сборку YAML.
+json_string() { python3 -c 'import json, sys; print(json.dumps(sys.argv[1]))' "$1"; }
+
 # Рендер демо-контура с тегами образов в .tmp: трекаемый kustomization.yaml не меняется.
-# Печатает путь к отрендеренному файлу. Используется deploy.sh и rollback.sh.
+# Печатает путь к отрендеренному файлу. Используется deploy.sh, rollback.sh и check.sh.
+# Второй аргумент — куда писать рендер (по умолчанию .tmp/rendered/deploy.yaml):
+# check.sh рендерит дважды (с подстановкой адресов и без) и сравнивает результаты.
+# Env ALERT_EMAIL_TO/ALERT_EMAIL_FROM/SMTP_SMARTHOST/SMTP_USERNAME подставляет реальные
+# адреса и SMTP-хост вместо плейсхолдеров example.invalid из git.
 render_demo_manifests() {
   local tag="$1"
   local overlay="${PROJECT_ROOT}/.tmp/overlay"
-  local out="${PROJECT_ROOT}/.tmp/rendered/deploy.yaml"
+  local out="${2:-${PROJECT_ROOT}/.tmp/rendered/deploy.yaml}"
   mkdir -p "${overlay}" "$(dirname "${out}")"
+
+  # SMTP-хост обязан быть host:port: оверлей — не место, где это выяснится уже
+  # после apply (письмо тогда просто не уйдёт, а конфиг останется валидным).
+  if [ -n "${SMTP_SMARTHOST:-}" ]; then
+    [[ "${SMTP_SMARTHOST}" =~ ^[^:]+:[0-9]+$ ]] \
+      || die "SMTP_SMARTHOST='${SMTP_SMARTHOST}' не формата host:port (например smtp.example.invalid:587)"
+  fi
+  # Пары «json-pointer значение»: по одной строке на заданную переменную. Патч
+  # появляется только для того, что реально передали: адреса и SMTP-хост можно
+  # задать по отдельности (проверка в check.sh подставляет только два из четырёх).
+  local email_patches=()
+  if [ -n "${ALERT_EMAIL_TO:-}" ]; then
+    email_patches+=("/spec/receivers/1/emailConfigs/0/to $(json_string "${ALERT_EMAIL_TO}")")
+  fi
+  if [ -n "${ALERT_EMAIL_FROM:-}" ]; then
+    email_patches+=("/spec/receivers/1/emailConfigs/0/from $(json_string "${ALERT_EMAIL_FROM}")")
+  fi
+  if [ -n "${SMTP_SMARTHOST:-}" ]; then
+    email_patches+=("/spec/receivers/1/emailConfigs/0/smarthost $(json_string "${SMTP_SMARTHOST}")")
+  fi
+  if [ -n "${SMTP_USERNAME:-}" ]; then
+    email_patches+=("/spec/receivers/1/emailConfigs/0/authUsername $(json_string "${SMTP_USERNAME}")")
+  fi
+  if [ "${#email_patches[@]}" -eq 0 ]; then
+    warn "ALERT_EMAIL_TO/ALERT_EMAIL_FROM/SMTP_SMARTHOST/SMTP_USERNAME не заданы — в маршруте останутся плейсхолдеры example.invalid, письма по page|critical не уйдут"
+  fi
   local images=()
   local dockerfile
   for dockerfile in "${PROJECT_ROOT}"/app/*/Dockerfile; do
@@ -107,6 +142,18 @@ render_demo_manifests() {
     for dockerfile in "${images[@]}"; do
       printf '  - name: %s\n    newTag: %s\n' "${dockerfile}" "${tag}"
     done
+    if [ "${#email_patches[@]}" -gt 0 ]; then
+      printf 'patches:\n'
+      printf '  - target:\n      group: monitoring.coreos.com\n      version: v1alpha1\n'
+      printf '      kind: AlertmanagerConfig\n      name: demo-notifications\n'
+      printf '    patch: |-\n'
+      for pair in "${email_patches[@]}"; do
+        # Значение — последняя часть строки после первого пробела: JSON-литерал
+        # может содержать пробелы (например «Имя <адрес>») и не должен резаться.
+        printf '      - op: replace\n        path: %s\n        value: %s\n' \
+          "${pair%% *}" "${pair#* }"
+      done
+    fi
   } > "${overlay}/kustomization.yaml"
   kubectl kustomize --load-restrictor LoadRestrictionsNone "${overlay}" > "${out}"
   [ -s "${out}" ] || die "рендер манифестов пуст — проверь kustomization.yaml и deploy/base"

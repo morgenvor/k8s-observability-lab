@@ -450,9 +450,101 @@ kubectl -n demo port-forward svc/alert-sink 8080:8080
   большее, а такое уведомление Alertmanager ретраит бесконечно (группа никогда не
   попадёт в `/timeline`). Проверить действующее значение —
   `curl -s <alertmanager>/api/v2/status | jq -r .config.original | grep max_alerts`.
-- Маршрут ловит все алерты без матчеров, поэтому в sink приходит и шум чарта
-  (`KubeControllerManagerDown`, `KubeSchedulerDown`, `KubeProxyDown` — k3s не отдаёт эти
-  цели) и `SloDemoAvailabilityBurnSlow`. Это не поломка маршрута, а состояние стенда.
+- Маршрут — дерево, а не один получатель: `severity=~"page|critical"` уходит **и**
+  письмом (подраздел «E-mail (SMTP)» ниже), `ticket|info|warning|none` — в `/timeline`.
+  `Watchdog` (`none`) и шум чарта с `warning`/`critical` разбираются штатно по своим
+  веткам, `SloDemoAvailabilityBurnSlow` (`ticket`) — в sink. Шум чарта
+  (`KubeControllerManagerDown` и подобные) — не поломка маршрута, а состояние стенда.
+
+### E-mail (SMTP): page и critical
+
+Дерево маршрутов в `deploy/monitoring/alertmanagerconfig.yaml`:
+
+- родитель — `alert-sink` (`groupBy: [alertname, service]`, `groupWait: 10s`,
+  `groupInterval: 30s`, `repeatInterval: 4h`);
+- child 1 — `severity=~"page|critical"` → receiver `email`, `continue: true`;
+- child 2 — `severity=~"ticket|info|warning|none"` → receiver `alert-sink`;
+- child 3 — **catch-all без матчеров** → `alert-sink`.
+
+Почему так: `page`/`critical` означают «человеку пора смотреть», `ticket|info|warning` —
+«разберут в рабочее время», но журнал `/timeline` нужен и для доказательств дриллов,
+поэтому `page` попадает в оба места (разные получатели — это два уведомления, а не
+дубль одного). `continue: true` у первой ветки обязателен: без него Alertmanager
+останавливается на ней и остальные ветки для того же алерта не рассматривает.
+Catch-all — страховка от нового или отсутствующего `severity`: без него такой алерт
+ушёл бы в `null`-получатель и исчез молча.
+
+**Что нужно от окружения (в git этого нет):**
+
+1. SMTP-провайдер с **паролем приложения** (Яндекс: «Пароли приложений» в ID; Mail.ru:
+   «Пароли для внешних приложений»). Основной пароль ящика провайдеры для SMTP не
+   принимают — это частая причина «auth» в логах.
+2. `smarthost` под провайдера: `smtp.yandex.ru:465`, `smtp.mail.ru:465` (implicit TLS);
+   порт 587 работает по STARTTLS, в конфиге уже стоит `requireTLS: true`.
+3. Egress со стенда до этого хоста и порта — проверяется **до** работ:
+   `nc -z smtp.yandex.ru 465` с рабочей машины и из кластера. Закрытый порт не лечится
+   конфигом.
+
+**Порядок: Secret → конфиг.**
+
+```bash
+kubectl -n monitoring create secret generic alertmanager-smtp \
+  --from-literal=smtp-password='<пароль-приложения>'
+export ALERT_EMAIL_TO='alerts@<ваш-домен>'          # ящик человека для page|critical
+export ALERT_EMAIL_FROM='alertmanager@<ваш-домен>'  # обычно = логин SMTP
+export SMTP_SMARTHOST='smtp.yandex.ru:465'
+export SMTP_USERNAME='alertmanager@<ваш-домен>'
+./scripts/deploy.sh
+```
+
+`authPassword` в конфиге — ссылка на Secret `alertmanager-smtp`. Без него оператор не
+соберёт конфиг Alertmanager: правка не применится (доставка молча останется на старом
+конфиге), а при пересоздании пода Alertmanager не смонтирует том. Поэтому
+`scripts/deploy.sh` проверяет Secret до apply и падает с готовой командой создания.
+
+Адреса подставляет оверлей при рендере (`scripts/lib.sh`: JSON6902-патч
+`/spec/receivers/1/emailConfigs/0/{to,from,smarthost,authUsername}`), в git лежат
+плейсхолдеры `example.invalid`. `SMTP_SMARTHOST` валидируется как `host:port`.
+Без переменных `deploy.sh` предупреждает: маршрут валиден, письма не уходят.
+
+**Проверка:**
+
+```bash
+# 1) Alertmanager принял конфиг — тот же гейт делает deploy.sh после apply
+kubectl -n monitoring port-forward svc/monitoring-kube-prometheus-prometheus 9090:9090 &
+curl -sG http://127.0.0.1:9090/api/v1/query --data-urlencode \
+  'query=alertmanager_config_last_reload_successful{job="monitoring-kube-prometheus-alertmanager"}'
+# 2) маршрут и адреса так, как их видит Alertmanager
+kubectl -n monitoring port-forward svc/monitoring-kube-prometheus-alertmanager 9093:9093 &
+curl -s http://127.0.0.1:9093/api/v2/status | jq -r .config.original
+# 3) проба: page уходит письмом, ticket — в /timeline (sink: port-forward 8080)
+curl -s -XPOST http://127.0.0.1:9093/api/v2/alerts -H 'Content-Type: application/json' \
+  -d '[{"labels":{"alertname":"EmailProbe","severity":"page","service":"demo-api"},
+       "annotations":{"summary":"проверка доставки почты"}}]'
+# 4) ошибки интеграции e-mail
+curl -sG http://127.0.0.1:9090/api/v1/query --data-urlencode \
+  'query=increase(alertmanager_notifications_failed_total{integration="email"}[15m])'
+```
+
+Проба `page` должна появиться и в `/timeline` (catch-all + `continue`), и в ящике —
+проверять оба места: письмо может уйти в «Спам». Запись из `/api/v2/alerts` живёт до
+`resolve_timeout` (5m) либо снимается `DELETE /api/v2/alerts`; если проба осталась
+висеть, у неё не было `endsAt`.
+
+**Типовые причины «письма не приходят»:**
+
+| Симптом | Причина | Что делать |
+|---|---|---|
+| `notifications_failed_total{integration="email"}` растёт, в логе `auth` | неверный пароль приложения или `SMTP_USERNAME` ≠ логин | пересоздать Secret и повторить `deploy.sh` |
+| `'require_tls' is true ... does not advertise the STARTTLS extension` | провайдеру нужен 465 (implicit TLS), а не 587 | `SMTP_SMARTHOST=smtp.<провайдер>:465` |
+| `connection refused` / `i/o timeout` | закрыт egress 465/587 со стенда | `nc -z <host> 465`; это ограничение стенда, а не конфига |
+| ошибок нет, письма нет | письмо в «Спаме» или `from` не совпадает с логином (провайдер отбрасывает молча) | проверить ящик, выставить `ALERT_EMAIL_FROM` = логин SMTP |
+| горит `AlertmanagerFailedReload` | конфиг не загрузился, чаще всего из-за отсутствующего Secret | `kubectl -n monitoring logs sts/alertmanager-monitoring-kube-prometheus-alertmanager`, `/api/v2/status` |
+
+**Откат:** `git revert` коммита с маршрутом → `kubectl apply -k deploy/monitoring`
+(или `./scripts/deploy.sh`), затем `kubectl -n monitoring delete secret alertmanager-smtp`.
+После отката маршрут снова один (`всё → alert-sink`): письма перестают приходить,
+доставка в приёмник не страдает.
 
 ### Дриллы: прерванный прогон
 
@@ -527,11 +619,12 @@ kubectl -n demo get endpointslices -l kubernetes.io/service-name=demo-api \
 | `warning` | чарт | ресурсы/состояние кластера, требует внимания, не срочно | `alert-sink` |
 | `none` | чарт (`Watchdog`) | «доставка работает»: всегда firing | `alert-sink` |
 
-Последняя колонка — **контракт маршрута v1.1, ещё не действующий**: в текущем
-`deploy/monitoring/alertmanagerconfig.yaml` маршрут **один** (без матчеров), и всё,
-включая `page` и `critical`, приходит в `alert-sink` (`/timeline`). Ветки по `severity`
-и e-mail для `page|critical` — Phase 3 плана v1.1; до неё колонку читай как цель, а не
-как факт. Проверить, что действует сейчас — раздел «Маршрут уведомлений и alert-sink».
+Последняя колонка — действующий маршрут (`deploy/monitoring/alertmanagerconfig.yaml`:
+ветка `page|critical` → `email`, остальное → `alert-sink`, плюс catch-all в sink).
+Оговорка одна: письма уходят только если окружение задало адреса и SMTP при деплое
+(`ALERT_EMAIL_TO`/`ALERT_EMAIL_FROM`/`SMTP_SMARTHOST`/`SMTP_USERNAME`), иначе в
+маршруте стоят плейсхолдеры `example.invalid` — проверка и диагностика в подразделе
+«E-mail (SMTP)» выше.
 
 **Порядок разбора** (сначала факт, потом причина — иначе легко чинить не то):
 
@@ -720,8 +813,8 @@ kube-prometheus-stack.
 2. `/timeline` — пусто или старые записи? Пусто при живом sink → маршрут.
 3. `kubectl -n monitoring get alertmanagerconfig`, затем сгенерированный конфиг:
    `kubectl -n monitoring get secret alertmanager-monitoring-kube-prometheus-alertmanager-generated -o jsonpath='{.data.alertmanager\.yaml\.gz}' | base64 -d | gunzip | grep -A3 webhook_configs`
-   — маршрут на месте? Сейчас он один, без child-routes; после Phase 3 проверяй ещё и
-   наличие catch-all child-route (без матчеров).
+   — маршрут на месте? В действующем конфиге это дерево: ветка `email` с
+   `continue: true`, ветка `alert-sink` по `severity` и catch-all без матчеров.
 4. `alertmanager_config_last_reload_successful{job="monitoring-kube-prometheus-alertmanager"}`
    и лог Alertmanager: ошибка конфига останавливает **всю** доставку.
 5. Состояние самого sink: `up{job="alert-sink"}`, `kubectl -n demo logs deploy/alert-sink`.
