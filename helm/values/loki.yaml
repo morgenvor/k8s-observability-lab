@@ -46,8 +46,11 @@ loki:
     # Alertmanager того же стека: Service релиза monitoring, порт 9093. Правила уходят
     # тем же деревом маршрутов, что и алерты Prometheus (severity: ticket → alert-sink).
     alertmanager_url: http://monitoring-kube-prometheus-alertmanager.monitoring.svc:9093
-    # GET /prometheus/api/v1/rules на порту 3100 — единственный способ офлайн-класса
-    # увидеть, что правило реально загрузилось; без этого флага ручка не поднимается.
+    # GET /prometheus/api/v1/rules на порту 3100 — единственный способ увидеть, что
+    # правило реально загрузилось. В Loki 3.6.11 дефолт этого флага — true (сверено с
+    # docs/sources/shared/configuration.md и исходником pkg/ruler/base/ruler.go),
+    # поэтому здесь он выписан явно как страховка: если дефолт чарта или Loki сменится
+    # на false, ручка исчезнет молча, а вместе с ней — единственная проверка загрузки.
     enable_api: true
     # Дефолт rule_path — /rules, но этот путь в поде не смонтирован, а root FS
     # readOnlyRootFilesystem: true. /tmp — emptyDir из шаблона StatefulSet, туда писать можно.
@@ -80,8 +83,19 @@ singleBinary:
   # Правила Loki ruler — ConfigMap loki-rules из deploy/loki-rules, только на чтение.
   # Том монтируется сразу в подкаталог тенанта: локальное хранилище правил читает
   # `<directory>/<tenant>/<файл>`, а при auth_enabled: false тенант — "fake"
-  # (docs Loki, multi-tenancy). Имя ключа ConfigMap в тенанта превратить нельзя:
-  # в ключах ConfigMap слэш недопустим, а mountPath — можно.
+  # (docs Loki, multi-tenancy). Ключ ConfigMap в имя каталога превратить нельзя (слэш
+  # в ключах недопустим), поэтому тенант задан mountPath; альтернатива — `items[].path`
+  # у тома, но она рассыпает конфигурацию по двум местам без выигрыша.
+  #
+  # Том НЕ помечен `optional: true` намеренно, и это решение, а не недосмотр.
+  # Цена — жёсткий порядок применения: ConfigMap обязан существовать до создания пода,
+  # иначе под встанет в ContainerCreating на несуществующем томе (видно сразу:
+  # `kubectl -n monitoring describe pod loki-0`, а также алертом LokiDown). Порядок
+  # описан в docs/runbook.md, раздел «Логи: Loki и Alloy»: сначала манифесты
+  # (`./scripts/deploy.sh` или `kubectl apply -k .`), потом `helmfile apply -l name=loki`.
+  # Обратный выбор (optional: true) сделал бы пропажу правил тихой: под жив, ruler пуст,
+  # и об этом не сообщает ни один алерт — ровно тот класс поломки, против которого
+  # заведены ворота проекта.
   extraVolumes:
     - name: loki-rules
       configMap:

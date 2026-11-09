@@ -114,8 +114,9 @@ rules` — `SUCCESS`. Чарты снова из локальных копий (
 | 2026-11-08 | доставка в приёмник | `/timeline`, `alertsink_*` | 4 уведомления: 2 × `Watchdog` (`none`), `EmailProbePage` (`page`, пришёл через catch-all), `EmailProbeTicket` (`ticket`) |
 | 2026-11-08 | Loki ruler: загрузка правила | `helmfile apply -l name=loki` (ревизия 4), `/prometheus/api/v1/rules` Loki (порт 3100) | группа `demo-api-logs`, файл `demo-api-5xx.yaml`, `interval: 60`, правило `DemoApi5xxFromLogs` `health: ok`, метки `severity=ticket`, `service=demo-api`; рестарт пода Loki прошёл без ошибок старта |
 | 2026-11-08 | Loki ruler: оценка и путь до Alertmanager | `/metrics` Loki, `/config` Loki | `loki_prometheus_rule_evaluations_total{rule_group="…;demo-api-logs"} = 2`, `…_failures_total = 0`; `ruler.alertmanager_url` = Service Alertmanager, `enable_api: true`, `storage.local.directory: /etc/loki/rules`, `rule_path: /tmp/loki-rules`; `loki_prometheus_notifications_alertmanagers_discovered{alertmanager="…/api/v2/alerts"} = 1`, `sent_total = 0` (гореть нечему) |
-| 2026-11-09 | Loki ruler: фильтр `/ready` в живом правиле | `kubectl apply -k deploy/loki-rules` (ConfigMap правил), `/prometheus/api/v1/rules` Loki | правка правила доехала до пода **без рестарта**: `route!="/ready"` в выражении, `health: ok`; пересборка образов и `helmfile apply` не нужны — правило приезжает томом |
+| 2026-11-09 | Loki ruler: фильтр `/ready` в живом правиле | `kubectl apply -k deploy/loki-rules` (ConfigMap правил), `/prometheus/api/v1/rules` Loki | правка доехала до пода **без рестарта** (контейнер поднят 08:55:31Z, правка применена 09:35Z, `restartCount` не изменился): `route!="/ready"` в выражении, `health: ok`; пересборка образов и `helmfile apply` не нужны — правило приезжает томом |
 | 2026-11-09 | Loki ruler: срабатывание и доставка до sink | временное правило `LogPathProbe` в том же ConfigMap, `/prometheus/api/v1/rules`, `/timeline` приёмника | загружено 09:36:04Z, `firing` 09:36:14Z, запись в `/timeline` 09:36:22Z (`status=firing`, метки `severity=ticket`, `probe=loki-path`); пробное правило удалено 09:36:24Z и выгружено из ruler к 09:37:44Z — путь «ruler → Alertmanager → `alert-sink`» доказан на реальных логах |
+| 2026-11-09 | Loki ruler: `resolved` до sink | `/timeline` приёмника | после удаления пробного правила пришла запись `2026-11-09T09:40:22.084Z` `status=resolved` для `LogPathProbe` — ветка `sendResolved: true` webhook-приёмника работает и для алертов ruler |
 
 Как проверить это повторно (временное правило по реальному трафику, без выдуманных строк
 и без правки кода) — раздел «Правила Loki ruler» в `docs/runbook.md`.
@@ -127,10 +128,11 @@ rules` — `SUCCESS`. Чарты снова из локальных копий (
 - вручение письма подтверждено скриншотом владельца (`docs/images/alert-email.png`), но
   не метрикой: «письмо ушло» и «письмо прочитано» — разные события, и SMTP-сервер о втором
   не сообщает;
-- `resolved`-ветка e-mail/`sendResolved`: проба через `/api/v2/alerts` без `endsAt`
+- `resolved`-ветка **e-mail**/`sendResolved`: проба через `/api/v2/alerts` без `endsAt`
   осталась `active` (снять её нельзя, `DELETE` отдаёт 405; статус пересчитывается только
   при обновлении алерта или сборке мусора), поэтому закрытие письмом этой пробой не
-  проверено — его покажет ближайший дрилл;
+  проверено — его покажет ближайший дрилл. У webhook-приёмника `resolved` проверен
+  2026-11-09 на пробном правиле ruler (см. таблицу выше); у e-mail — нет;
 - heartbeat пути уведомлений (правила `AlertSinkHeartbeatMissing`, `AlertSinkNeverReceived`);
 - срабатывание `DemoApi5xxFromLogs` именно на **реальном 5xx**. Путь «правило →
   Alertmanager → sink» доказан 2026-11-09 пробным правилом на обычных логах, но ни одного
