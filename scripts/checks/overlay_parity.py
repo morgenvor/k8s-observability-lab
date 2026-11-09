@@ -22,15 +22,18 @@ from common import fail, load_docs
 def objects(path):
     found = set()
     for doc in load_docs(path):
+        metadata = doc.get("metadata") or {}
         kind = doc.get("kind")
-        name = (doc.get("metadata") or {}).get("name")
+        name = metadata.get("name")
+        # namespace в ключе: перенос объекта между namespace меняет результат деплоя,
+        # хотя kind/name остаются прежними.
         if kind and name:
-            found.add((kind, name))
+            found.add((kind, metadata.get("namespace"), name))
     return found
 
 
 def describe(items):
-    return ", ".join(f"{kind}/{name}" for kind, name in items)
+    return ", ".join(f"{kind}/{namespace or '-'}/{name}" for kind, namespace, name in items)
 
 
 def main():

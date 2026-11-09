@@ -1,6 +1,6 @@
 # Офлайн-ворота проекта. Реальный прогон возможен только после push владельцем
 # (правило 3 AGENTS: публикация — действие владельца); локальный эквивалент —
-# ./scripts/check.sh и ./scripts/check.sh --images.
+# ./scripts/check.sh --smoke (шаги без docker: ./scripts/check.sh).
 # Smoke фикстуры (флаг --smoke ниже) — тот же scripts/smoke-local.sh, что и локально.
 name: ci
 
@@ -22,7 +22,7 @@ jobs:
         with:
           node-version: '22'
       - name: Install lint tooling
-        # pyyaml нужен шагу выгрузки PrometheusRule -> rulefiles в scripts/check.sh
+        # pyyaml нужен шагу выгрузки PrometheusRule и ассертам scripts/checks (need_pyyaml)
         run: python3 -m pip install --quiet yamllint pyyaml
       - name: Install pinned tools
         run: ./scripts/bootstrap-tools.sh

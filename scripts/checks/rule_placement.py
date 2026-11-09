@@ -37,6 +37,16 @@ def main():
     prometheus = find(render, "Prometheus", where="рендере helmfile")
     prometheus_ns = (prometheus.get("metadata") or {}).get("namespace")
     selector = (prometheus.get("spec") or {}).get("ruleSelector") or {}
+    # Пустой ruleSelector (MatchAll) сделал бы проверку меток тождественно истинной:
+    # тогда ни одна метка не проверяется, а ворота остаются зелёными. Так бывает при
+    # `ruleSelectorNilUsesHelmValues: true` или смене чарта — это повод остановиться,
+    # а не молча потерять проверку.
+    if not (selector.get("matchLabels") or {}):
+        fail(
+            "Prometheus ruleSelector пуст — ассерт меток стал бы no-op."
+            " Проверь ruleSelectorNilUsesHelmValues и serviceMonitorSelector в"
+            " helm/values/kps.yaml: правила должны отбираться по release=monitoring"
+        )
 
     rules = [doc for doc in kustomize if doc.get("kind") == "PrometheusRule"]
     if not rules:

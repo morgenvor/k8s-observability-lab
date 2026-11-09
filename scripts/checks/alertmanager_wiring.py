@@ -20,7 +20,16 @@ MATCHER_HINT = (
 )
 
 
-def reject_nonempty_selector(spec, key, where):
+def require_match_all_selector(spec, key, where):
+    # Ключ обязан быть отрендерен явно. Отсутствие — не доказательство MatchAll: у
+    # namespace-селектора nil означает «только свой namespace», и тогда конфиг из
+    # monitoring перестанет подхватываться. Пустой `{}` — это и есть MatchAll.
+    if key not in spec:
+        fail(
+            f"{where}: поле {key} не отрендерено — MatchAll не доказан."
+            " Чарт выводит селекторы явно; отсутствие ключа означает другой режим"
+            " (например, nil у namespace-селектора = только свой namespace)"
+        )
     selector = spec.get(key)
     if selector:
         fail(
@@ -47,8 +56,8 @@ def main():
             "Alertmanager: alertmanagerConfigMatcherStrategy.type="
             f"{strategy.get('type')!r}, ожидалось 'None' — {MATCHER_HINT}"
         )
-    reject_nonempty_selector(spec, "alertmanagerConfigSelector", "Alertmanager")
-    reject_nonempty_selector(spec, "alertmanagerConfigNamespaceSelector", "Alertmanager")
+    require_match_all_selector(spec, "alertmanagerConfigSelector", "Alertmanager")
+    require_match_all_selector(spec, "alertmanagerConfigNamespaceSelector", "Alertmanager")
 
     config = find(
         kustomize, "AlertmanagerConfig", "demo-notifications", where="рендере kustomize"

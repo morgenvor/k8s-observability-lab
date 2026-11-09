@@ -11,6 +11,8 @@ example.* зарезервированы RFC 2606 и намеренно оста
 import re
 import sys
 
+from common import fail
+
 # Адрес: local-part@домен с хотя бы одной точкой. Домен без точки (scoped-пакет,
 # digest @sha256) адресом не считается.
 ADDRESS = re.compile(r"[A-Za-z0-9._%+-]+[@][A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+")
@@ -24,8 +26,10 @@ def main():
         try:
             with open(path, encoding="utf-8", errors="replace") as handle:
                 text = handle.read()
-        except OSError:
-            continue
+        except OSError as exc:
+            # Пропустить нечитаемый файл — значит дать воротам зелёный результат с
+            # дырой: файл в индексе есть, а скан его не видел.
+            fail(f"{path}: не читается ({exc})")
         # Бинарные файлы (изображения в docs/images) текстом не разбираем: там случайные
         # байты, а секретов в картинке скан всё равно не найдёт — её проверяет человек.
         if "\x00" in text:

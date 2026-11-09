@@ -545,12 +545,14 @@ kubectl -n demo port-forward svc/alert-sink 8080:8080
 - `Watchdog` (`vector(1)`, всегда firing) — эталон «маршрут работает»: он приходит в
   `/timeline` первым. Нет его при живых алертах в Prometheus — проверяй
   `alertmanagerConfigMatcherStrategy` (обязан быть `None`, иначе оператор подмешивает
-  `namespace="monitoring"` и алерты из `demo` не доходят) и лог Alertmanager.
+  `namespace="monitoring"` и алерты из `demo` не доходят) и лог Alertmanager. Офлайн это
+  сторожит шаг 4e ворот: `type: None`, пустые селекторы и `apiVersion` конфига.
 - Метрики sink в Prometheus: `alertsink_notifications_total` и `up{job="alert-sink"}`
   (цель добавлена сверх плана фазы 4, иначе метрики живут только в поде).
 - `AlertmanagerConfig` — CRD версии **v1alpha1**: у operator 0.94.2 версии `v1` нет, и
-  `apply` с ней падает на «no matches for kind AlertmanagerConfig», хотя офлайн-рендер
-  и `kubeconform` этого не видят.
+  `apply` с ней падает на «no matches for kind AlertmanagerConfig». `kubeconform` схему
+  CRD не проверяет, поэтому версию сторожит шаг 4e ворот; схема полей офлайн по-прежнему
+  не проверяется.
 - У webhook стоит `maxAlerts: 50`: sink принимает тело до 1 MiB и отвечает 413 на
   большее, а такое уведомление Alertmanager ретраит бесконечно (группа никогда не
   попадёт в `/timeline`). Проверить действующее значение —

@@ -232,21 +232,22 @@ grep -q 'name: loki-rules' "${OVERLAY_RENDER}" \
 # оператора (OnNamespace) молча отрезает конфиг из monitoring (alertmanager_wiring.py).
 step "связка Alertmanager и AlertmanagerConfig"
 python3 "${PROJECT_ROOT}/scripts/checks/alertmanager_wiring.py" \
-  .tmp/rendered/helmfile.yaml .tmp/rendered/kustomize.yaml
+  "${PROJECT_ROOT}/.tmp/rendered/helmfile.yaml" "${PROJECT_ROOT}/.tmp/rendered/kustomize.yaml"
 
 # --- 4f. Размещение правил: метки, namespace, членство в kustomization --------
 # Выгрузка для promtool берёт только spec.groups, поэтому метка release=monitoring,
 # namespace и членство в kustomization проверяются здесь (детали — rule_placement.py).
 step "размещение правил (метки, namespace, членство)"
 python3 "${PROJECT_ROOT}/scripts/checks/rule_placement.py" \
-  .tmp/rendered/helmfile.yaml .tmp/rendered/kustomize.yaml rules rules/kustomization.yaml
+  "${PROJECT_ROOT}/.tmp/rendered/helmfile.yaml" "${PROJECT_ROOT}/.tmp/rendered/kustomize.yaml" \
+  "${PROJECT_ROOT}/rules" "${PROJECT_ROOT}/rules/kustomization.yaml"
 
 # --- 4g. Паритет оверлея деплоя и kustomization.yaml --------------------------
 # Два пути деплоя: `kubectl apply -k .` и scripts/deploy.sh со своим списком каталогов
 # в render_demo_manifests (детали — overlay_parity.py).
 step "паритет оверлея деплоя и kustomization"
 python3 "${PROJECT_ROOT}/scripts/checks/overlay_parity.py" \
-  .tmp/rendered/kustomize.yaml "${OVERLAY_RENDER}"
+  "${PROJECT_ROOT}/.tmp/rendered/kustomize.yaml" "${OVERLAY_RENDER}"
 
 # --- 5. Правила Prometheus: синтаксис и юнит-тесты ---------------------------
 # promtool не читает PrometheusRule CRD, а правила обязаны быть CRD: spec.groups
