@@ -12,6 +12,11 @@ info() { printf '==> %s\n' "$*"; }
 warn() { printf 'WARN: %s\n' "$*" >&2; }
 die() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
 
+# Заголовок шага. Запоминает имя в STEP: по нему ERR-ловушка вызывающего скрипта
+# сообщает, какой именно шаг упал, а не «что-то пошло не так».
+STEP=""
+step() { STEP="$*"; printf '\n==> %s\n' "${STEP}"; }
+
 # Инструменты проекта лежат в .tools (bootstrap-tools.sh), helm-состояние — тоже там.
 use_tools() {
   export PATH="${TOOLS_BIN}:${PATH}"
@@ -23,6 +28,14 @@ use_tools() {
 
 need_cmd() {
   command -v "$1" >/dev/null 2>&1 || die "нет команды '$1' (нужные инструменты ставит scripts/bootstrap-tools.sh)"
+}
+
+# PyYAML нужен выгрузке правил, подсчёту групп и ассертам в scripts/checks: проверяем
+# сразу и одним сообщением, иначе шаг падал бы трейсбеком ModuleNotFoundError.
+need_pyyaml() {
+  need_cmd python3
+  python3 -c 'import yaml' 2>/dev/null \
+    || die "нет модуля PyYAML (python3 -m pip install pyyaml)"
 }
 
 # Проверяет, что инструменты уже скачаны; иначе подсказывает bootstrap.
@@ -42,9 +55,7 @@ require_tools() {
 # скрипте: новый PrometheusRule не может «тихо» не доехать до Prometheus, а число
 # не нужно править руками (раньше «7» жило и в комментарии, и в коде).
 expected_rule_groups() {
-  need_cmd python3
-  python3 -c 'import yaml' 2>/dev/null \
-    || die "нет модуля PyYAML для подсчёта групп правил (python3 -m pip install pyyaml)"
+  need_pyyaml
   local files=()
   mapfile -t files < <(printf '%s\n' "${PROJECT_ROOT}"/rules/*.yaml)
   [ -e "${files[0]}" ] || die "в rules/ нет ни одного .yaml — считать нечего"

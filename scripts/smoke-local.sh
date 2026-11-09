@@ -140,8 +140,6 @@ process.stdin.on("end", () => {
 }
 
 # --- 1. Сборка образов -------------------------------------------------------
-step() { printf '\n==> %s\n' "$*"; }
-
 shopt -s nullglob
 DOCKERFILES=(app/*/Dockerfile)
 [ "${#DOCKERFILES[@]}" -gt 0 ] || die "нет app/*/Dockerfile — собирать нечего"

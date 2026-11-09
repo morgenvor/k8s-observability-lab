@@ -51,6 +51,15 @@ def find(docs, kind, name=None, where="рендере"):
     return found[0]
 
 
+def finder(docs, where="рендере"):
+    """Функция find(kind, name) для конкретного рендера — вместо копии поиска в файле."""
+
+    def find_one(kind, name=None):
+        return find(docs, kind, name, where=where)
+
+    return find_one
+
+
 def require_api(doc, expected, where):
     """apiVersion не проверяет kubeconform (--ignore-missing-schemas), но apply его видит."""
     actual = doc.get("apiVersion")

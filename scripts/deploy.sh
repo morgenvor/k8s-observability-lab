@@ -17,10 +17,8 @@ require_cluster
 need_cmd curl
 need_cmd docker
 need_cmd git
-need_cmd python3
 # PyYAML нужен гейту активного конфига Alertmanager: он разбирает /api/v2/status.
-python3 -c 'import yaml' 2>/dev/null \
-  || die "нет модуля PyYAML для проверки активного конфига Alertmanager (python3 -m pip install pyyaml)"
+need_pyyaml
 
 TAG="${IMAGE_TAG:-$(git rev-parse --short HEAD 2>/dev/null)}"
 [ -n "${TAG}" ] || die "не удалось определить тег: нет git-репозитория? задай IMAGE_TAG"
