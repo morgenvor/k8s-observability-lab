@@ -127,3 +127,51 @@ spec:
               поэтому дашборд выглядит зелёным, хотя оценивать нечего. Проверь под
               demo-load, его логи и load_ticks_skipped_total, а также конфиг toxiproxy.
             runbook_url: "https://github.com/morgenvor/k8s-observability-lab/blob/main/docs/runbook.md#сторожа-правил-и-slo-meta"
+
+    # Троттлинг генератора — сторож того же класса, но с другой стороны: не
+    # «правил нет», а «прибор врёт». SLI считаются по клиентским метрикам
+    # demo-load, поэтому заморозка его cgroup попадает прямо в бюджет ошибок.
+    # Разбор 2026-11-09: при limits.cpu=100m контейнер был заморожен в 26-37 %
+    # периодов CFS, длительности квантовались по ~100 мс, 9 % запросов выходили за
+    # 300 мс, 2 % — за клиентский timeout 1 с; при этом у demo-api не было ни одной
+    # ошибки и серверный p99 был 19 мс.
+    #
+    # Почему своё правило, а не чартовый CPUThrottlingHigh: тот имеет severity=info,
+    # а все info-алерты глушит ингибитор чарта (source: InfoInhibitor, target:
+    # severity="info", equal: namespace) — в namespace demo он горит всегда, когда
+    # горит любой info. Проверено на стенде: CPUThrottlingHigh был firing 07.11
+    # с 20:25 до 22:00 MSK, а до alert-sink не дошёл ни один экземпляр.
+    #
+    # Селекторы намеренно без job/metrics_path: жёсткий фильтр
+    # container!="" + job="kubelet" + metrics_path="/metrics/cadvisor" — то место,
+    # где чартовое правило ломается при смене scrape-конфига. Отношение не зависит
+    # от числа источников: числитель и знаменатель масштабируются одинаково.
+    - name: demo-meta.generator
+      rules:
+        - alert: LoadGeneratorThrottled
+          expr: |
+            sum by (namespace, pod) (
+              rate(container_cpu_cfs_throttled_periods_total{
+                namespace="demo", pod=~"demo-load-.*", container!=""}[5m])
+            )
+            /
+            sum by (namespace, pod) (
+              rate(container_cpu_cfs_periods_total{
+                namespace="demo", pod=~"demo-load-.*", container!=""}[5m])
+            ) > 0.1
+          for: 10m
+          labels:
+            severity: ticket
+            service: demo-api
+            namespace: demo
+          annotations:
+            summary: "demo-api: генератор нагрузки троттлится, SLI считает его простой"
+            description: >-
+              Контейнер demo-load выбирает квоту CPU больше чем в 10 % периодов CFS
+              дольше 10 минут. Это не отказ сервиса, а дефект прибора: SLI считаются
+              по клиентским метрикам генератора, поэтому заморозка контейнера уходит
+              в бюджет ошибок доступности и латентности — длительности квантуются по
+              ~100 мс, растут timeout и доля запросов дольше 300 мс, а demo-api при
+              этом отвечает за единицы миллисекунд. Поднимай limits.cpu пода
+              demo-load, а не ищи причину в demo-api.
+            runbook_url: "https://github.com/morgenvor/k8s-observability-lab/blob/main/docs/runbook.md#троттлинг-генератора-нагрузки"

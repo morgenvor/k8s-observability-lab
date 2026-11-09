@@ -150,3 +150,49 @@ tests:
                 SloRulesAbsent молчит, а страниц по бюджету ошибок нет вовсе — тишина
                 не означает «всё хорошо».
               runbook_url: "https://github.com/morgenvor/k8s-observability-lab/blob/main/docs/runbook.md#сторожа-правил-и-slo-meta"
+
+  # --- Троттлинг генератора нагрузки ----------------------------------------
+  # Отношение throttled/periods считается по cgroup-метрикам контейнера: в тесте
+  # метки namespace/pod/container подставлены так же, как их отдаёт cadvisor.
+  # Порог 0.1 и for: 10m — как в rules/meta.yaml.
+  - name: "генератор троттлится: LoadGeneratorThrottled горит"
+    interval: 1m
+    input_series:
+      - series: 'container_cpu_cfs_throttled_periods_total{namespace="demo",pod="demo-load-abc",container="demo-load"}'
+        values: '0+5x40'
+      - series: 'container_cpu_cfs_periods_total{namespace="demo",pod="demo-load-abc",container="demo-load"}'
+        values: '0+10x40'
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: LoadGeneratorThrottled
+        exp_alerts:
+          - exp_labels:
+              severity: ticket
+              service: demo-api
+              namespace: demo
+              pod: demo-load-abc
+            exp_annotations:
+              summary: "demo-api: генератор нагрузки троттлится, SLI считает его простой"
+              description: >-
+                Контейнер demo-load выбирает квоту CPU больше чем в 10 % периодов CFS
+                дольше 10 минут. Это не отказ сервиса, а дефект прибора: SLI считаются
+                по клиентским метрикам генератора, поэтому заморозка контейнера уходит
+                в бюджет ошибок доступности и латентности — длительности квантуются по
+                ~100 мс, растут timeout и доля запросов дольше 300 мс, а demo-api при
+                этом отвечает за единицы миллисекунд. Поднимай limits.cpu пода
+                demo-load, а не ищи причину в demo-api.
+              runbook_url: "https://github.com/morgenvor/k8s-observability-lab/blob/main/docs/runbook.md#троттлинг-генератора-нагрузки"
+
+  # Обратная сторона: 2 % периодов — норма (короткие всплески при старте пода),
+  # алерт молчит. Без этого кейса любая правка порога вниз прошла бы незамеченной.
+  - name: "генератор в норме: LoadGeneratorThrottled молчит"
+    interval: 1m
+    input_series:
+      - series: 'container_cpu_cfs_throttled_periods_total{namespace="demo",pod="demo-load-abc",container="demo-load"}'
+        values: '0+1x40'
+      - series: 'container_cpu_cfs_periods_total{namespace="demo",pod="demo-load-abc",container="demo-load"}'
+        values: '0+50x40'
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: LoadGeneratorThrottled
+        exp_alerts: []
