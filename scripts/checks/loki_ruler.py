@@ -16,12 +16,12 @@ rule_group. Если группу переименовать, а селекто�
 Использование: loki_ruler.py <helmfile-render> <kustomize-render> <rules/pipeline.yaml>
 """
 
+import re
 import sys
 
 import yaml
 
-from common import fail, finder, load_docs
-from common import find as find_doc
+from common import fail, find as find_doc, finder, load_docs
 
 ALERTMANAGER_URL = "http://monitoring-kube-prometheus-alertmanager.monitoring.svc:9093"
 # Локальное хранилище правил читает <directory>/<tenant>/<файл>, а тенант при
@@ -151,8 +151,8 @@ def main():
     # сторожа иначе появилась бы молча — ровно та дыра, ради которой шаг и заведён.
     group_names = set()
     for data_value in data.values():
-        rule_doc = yaml.safe_load(data_value) or {}
-        for group in rule_doc.get("groups") or []:
+        file_doc = yaml.safe_load(data_value) or {}
+        for group in file_doc.get("groups") or []:
             if isinstance(group, dict) and group.get("name"):
                 group_names.add(group["name"])
     if not group_names:
@@ -169,16 +169,31 @@ def main():
             f"{pipeline_path}: нет сторожа {missing} — правило ruler снова никто не"
             " сторожит (см. rules/pipeline.yaml, группа demo-logs-pipeline.loki)"
         )
+    # Селектор разбирается, а не ищется подстрокой: «logs» внутри «demo-api-logs»
+    # прошёл бы проверку подстрокой, хотя после переименования группы сторож смотрел
+    # бы в пустоту. Полное совпадение проверяется на обеих формах метки — с префиксом
+    # файла и без (см. комментарий в rules/pipeline.yaml).
     for alert_name, watchdog in sorted(watchdogs.items()):
         expr = watchdog.get("expr") or ""
+        selectors = re.findall(r'rule_group\s*=~?\s*"([^"]+)"', expr)
+        if not selectors:
+            fail(
+                f"{alert_name}: в expr нет селектора rule_group — сторож не"
+                " привязан к группе ruler, проверять нечего"
+            )
         for group_name in sorted(group_names):
-            if group_name not in expr:
+            prefixed = f"/tmp/loki-rules/fake/{RULE_KEY};{group_name}"
+            if not any(
+                re.fullmatch(selector, group_name) or re.fullmatch(selector, prefixed)
+                for selector in selectors
+            ):
                 fail(
-                    f"{alert_name}: в expr нет имени группы ruler {group_name!r}."
-                    " Метка rule_group имеет вид «<файл>;<группа>»: при переименовании"
-                    " группы селектор перестанет совпадать, и сторож будет молчать или"
-                    " гореть постоянно. Поправь селектор в rules/pipeline.yaml вместе"
-                    " с именем группы в deploy/loki-rules/"
+                    f"{alert_name}: селектор {selectors} не совпадает с группой ruler"
+                    f" {group_name!r} (проверено на значениях rule_group «{group_name}»"
+                    f" и «{prefixed}»). Метка rule_group имеет вид «<файл>;<группа>»: при"
+                    " переименовании группы селектор перестанет совпадать, и сторож"
+                    " будет молчать или гореть постоянно. Поправь селектор в"
+                    " rules/pipeline.yaml вместе с именем группы в deploy/loki-rules/"
                 )
         labels = watchdog.get("labels") or {}
         if labels.get("severity") != "ticket":

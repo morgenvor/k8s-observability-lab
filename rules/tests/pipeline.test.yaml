@@ -303,13 +303,15 @@ tests:
   # Правило DemoApi5xxFromLogs живёт вне Prometheus, и до 2026-11-09 его загрузку
   # никто не сторожил: выпавший файл выглядел как «5xx нет». Сторожа — обычные
   # правила Prometheus, опорные метрики — счётчики движка правил Loki с меткой
-  # rule_group формата «<файл>;<группа>».
+  # rule_group формата «<файл>;<группа>». В живой метке перед `;` стоит путь к файлу
+  # (`file=/tmp/loki-rules/fake/demo-api-5xx.yaml` в логе пода 2026-11-08), в тесте
+  # префикс сокращён: селектор смотрит на хвост, и префикс ему безразличен.
   - name: "правило ruler вычисляется: оба сторожа молчат"
     interval: 1m
     input_series:
-      - series: 'loki_prometheus_rule_evaluations_total{rule_group="monitoring/demo-api-5xx.yaml;demo-api-logs"}'
+      - series: 'loki_prometheus_rule_evaluations_total{rule_group="demo-api-5xx.yaml;demo-api-logs"}'
         values: '0+1x40'
-      - series: 'loki_prometheus_rule_evaluation_failures_total{rule_group="monitoring/demo-api-5xx.yaml;demo-api-logs"}'
+      - series: 'loki_prometheus_rule_evaluation_failures_total{rule_group="demo-api-5xx.yaml;demo-api-logs"}'
         values: '0x40'
     alert_rule_test:
       - eval_time: 20m
@@ -342,8 +344,41 @@ tests:
                 дольше 10 минут: файл пропал из ConfigMap loki-rules, не смонтирован в
                 /etc/loki/rules/fake, ruler выключен или файл не разбирается. Правило
                 DemoApi5xxFromLogs при этом молчит, и отличить это от «5xx нет» нечем.
-                Проверь ConfigMap loki-rules, /prometheus/api/v1/rules на порту 3100 и
-                лог пода Loki.
+                Падение или rollout пода Loki даёт тот же симптом — тогда рядом горят
+                LokiDown/LokiTargetMissing. Проверь ConfigMap loki-rules,
+                /prometheus/api/v1/rules на порту 3100 и лог пода Loki.
+              runbook_url: "https://github.com/morgenvor/k8s-observability-lab/blob/main/docs/runbook.md#сторож-самого-правила-ruler"
+      - eval_time: 20m
+        alertname: LokiRulerEvaluationFailing
+        exp_alerts: []
+
+  # Группу переименовали, а селектор остался: серия есть, но под другим именем, и
+  # селектор её не видит. Сторож обязан сработать — это тот самый дрейф, от которого
+  # защищает ассерт в scripts/checks/loki_ruler.py (переименование без правки
+  # селектора валит ворота раньше, но и в рантайме сигнал должен быть).
+  - name: "группа ruler переименована: LokiRulerRulesMissing горит"
+    interval: 1m
+    input_series:
+      - series: 'loki_prometheus_rule_evaluations_total{rule_group="demo-api-5xx.yaml;demo-api-logs-v2"}'
+        values: '0+1x40'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: LokiRulerRulesMissing
+        exp_alerts:
+          - exp_labels:
+              namespace: monitoring
+              service: loki
+              severity: ticket
+            exp_annotations:
+              summary: "Loki ruler: правило по логам не вычисляется"
+              description: >-
+                Серии loki_prometheus_rule_evaluations_total для группы demo-api-logs нет
+                дольше 10 минут: файл пропал из ConfigMap loki-rules, не смонтирован в
+                /etc/loki/rules/fake, ruler выключен или файл не разбирается. Правило
+                DemoApi5xxFromLogs при этом молчит, и отличить это от «5xx нет» нечем.
+                Падение или rollout пода Loki даёт тот же симптом — тогда рядом горят
+                LokiDown/LokiTargetMissing. Проверь ConfigMap loki-rules,
+                /prometheus/api/v1/rules на порту 3100 и лог пода Loki.
               runbook_url: "https://github.com/morgenvor/k8s-observability-lab/blob/main/docs/runbook.md#сторож-самого-правила-ruler"
       - eval_time: 20m
         alertname: LokiRulerEvaluationFailing
@@ -355,9 +390,9 @@ tests:
   - name: "вычисление правила ruler падает: LokiRulerEvaluationFailing горит"
     interval: 1m
     input_series:
-      - series: 'loki_prometheus_rule_evaluations_total{rule_group="monitoring/demo-api-5xx.yaml;demo-api-logs"}'
+      - series: 'loki_prometheus_rule_evaluations_total{rule_group="demo-api-5xx.yaml;demo-api-logs"}'
         values: '0+1x40'
-      - series: 'loki_prometheus_rule_evaluation_failures_total{rule_group="monitoring/demo-api-5xx.yaml;demo-api-logs"}'
+      - series: 'loki_prometheus_rule_evaluation_failures_total{rule_group="demo-api-5xx.yaml;demo-api-logs"}'
         values: '0x15 1x25'
     alert_rule_test:
       - eval_time: 25m
@@ -380,4 +415,18 @@ tests:
               runbook_url: "https://github.com/morgenvor/k8s-observability-lab/blob/main/docs/runbook.md#сторож-самого-правила-ruler"
       - eval_time: 25m
         alertname: LokiRulerRulesMissing
+        exp_alerts: []
+
+  # Сбой был и прекратился: окно 15m теряет приращение, и алерт снимается сам —
+  # поэтому в описании правила стоит ~15 минут, а не «висит час».
+  - name: "сбой вычисления прекратился: LokiRulerEvaluationFailing молчит"
+    interval: 1m
+    input_series:
+      - series: 'loki_prometheus_rule_evaluations_total{rule_group="demo-api-5xx.yaml;demo-api-logs"}'
+        values: '0+1x40'
+      - series: 'loki_prometheus_rule_evaluation_failures_total{rule_group="demo-api-5xx.yaml;demo-api-logs"}'
+        values: '0x10 1x30'
+    alert_rule_test:
+      - eval_time: 35m
+        alertname: LokiRulerEvaluationFailing
         exp_alerts: []

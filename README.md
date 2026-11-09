@@ -82,7 +82,7 @@ flowchart TD
 | toxiproxy | 2.9.0 | `deploy/base/toxiproxy.yaml` |
 | demo-api, demo-load, alert-sink | node:22.23.4-alpine, тег = короткий SHA | `app/*/Dockerfile` |
 
-Своё: 23 алерта и 20 записывающих правил (43 правила) в 6 `PrometheusRule` (10 групп)
+Своё: 25 алертов и 20 записывающих правил (45 правил) в 6 `PrometheusRule` (10 групп)
 плюс одно правило Loki ruler (`deploy/loki-rules`), два дашборда (`demo-red`, `slo-demo`),
 четыре дрилла, офлайн-ворота `./scripts/check.sh` (их же запускает CI).
 

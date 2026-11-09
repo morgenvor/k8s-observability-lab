@@ -30,8 +30,8 @@
 | **размещение правил** | ok (6 `PrometheusRule`: метки под `ruleSelector`, namespace рядом с оператором, членство совпадает с `rules/kustomization.yaml`) |
 | **паритет оверлея деплоя** | ok (23 объекта в `kustomize.yaml` = 23 в рендере `deploy.sh`) |
 | `promtool check rules` | 6 файлов выгрузки: 2+2+2+1+1+2 группы |
-| `promtool test rules` | 6 наборов, `SUCCESS` (6/20/3/3/3/8 правил) |
-| ссылки в алертах | `runbook_url 24, dashboard_url 6`, анкоров в runbook 26 |
+| `promtool test rules` | 6 наборов, `SUCCESS` (6/20/3/3/3/10 правил) |
+| ссылки в алертах | `runbook_url 26, dashboard_url 6`, анкоров в runbook 27 |
 | **smoke фикстуры в docker** (`--smoke`) | три образа собраны, `/healthz`, `/ready`, `/metrics` (бакет `0.3`), рост `load_requests_total{outcome="ok"}` за 10 с, JSON-логи → `SMOKE OK` |
 | скан секретов и адресов | совпадений нет, 10 адресов — все `example.invalid`/`example.com` |
 
