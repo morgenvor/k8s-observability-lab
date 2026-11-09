@@ -21,7 +21,7 @@ for arg in "$@"; do
 done
 
 cd "${PROJECT_ROOT}"
-require_tools helm helmfile kubectl kubeconform promtool
+require_tools helm helmfile kubectl kubeconform promtool alloy
 mkdir -p "${PROJECT_ROOT}/.tmp/rendered"
 # Ворота герметичны: экспортированные в шелле SMTP_SMARTHOST/адреса меняли бы рендер
 # (а неверный формат хоста ронял бы прогон). Тестовые значения задаются явно в шагах.
@@ -93,23 +93,6 @@ grep -q 'loki.monitoring.svc:3100/loki/api/v1/push' .tmp/rendered/helmfile.yaml 
 # Каждая реплика Alloy обязана читать только свою ноду, иначе логи собираются дважды.
 grep -q '__meta_kubernetes_pod_node_name' .tmp/rendered/helmfile.yaml \
   || die "в конфиге Alloy нет фильтра по ноде — DaemonSet будет читать все поды каждой репликой"
-# Отбрасывание старых строк (фаза 6): без него рестарт пода Alloy возвращает шум
-# "entry too far behind" — Loki отвечает 400 на всё, что старше уже принятого.
-# Проверяется не только наличие stage.drop, но и цепочка: источник обязан писать в
-# drop_old, а drop_old — в loki.write. Иначе stage.drop окажется в графе, но не на
-# пути данных, и шум вернётся при зелёных воротах.
-grep -q 'loki.process "drop_old"' .tmp/rendered/helmfile.yaml \
-  || die "в конфиге Alloy нет loki.process drop_old (helm/values/alloy.yaml)"
-grep -qE 'older_than[[:space:]]*=[[:space:]]*"1h"' .tmp/rendered/helmfile.yaml \
-  || die "в stage.drop нет older_than = \"1h\" — старые строки снова доедут до Loki"
-grep -q 'drop_counter_reason = "too_old"' .tmp/rendered/helmfile.yaml \
-  || die "в stage.drop нет drop_counter_reason = \"too_old\" — счётчик потерь не отличить от прочих"
-grep -q 'forward_to = \[loki.process.drop_old.receiver\]' .tmp/rendered/helmfile.yaml \
-  || die "loki.source.kubernetes пишет мимо drop_old — фильтр старых строк не работает"
-grep -qE 'loki\.process "drop_old"' .tmp/rendered/helmfile.yaml \
-  && grep -A2 'loki.process "drop_old"' .tmp/rendered/helmfile.yaml \
-    | grep -q 'forward_to = \[loki.write.local.receiver\]' \
-  || die "drop_old не передаёт данные в loki.write — логи перестали бы уходить в Loki"
 # Выключенное в values не должно появиться в рендере.
 for disabled in loki-canary chunks-cache results-cache; do
   if grep -q "${disabled}" .tmp/rendered/helmfile.yaml; then
@@ -117,6 +100,62 @@ for disabled in loki-canary chunks-cache results-cache; do
   fi
 done
 printf 'ассерты Loki/Alloy: ok\n'
+
+# --- 3a2. Конфиг Alloy: фильтр старых строк и alloy validate ------------------
+# Ассерты идут по РАСПАКОВАННОМУ конфигу, а не по рендеру чарта: в манифесте конфиг
+# лежит блоком с отступом, и якорь `^loki.process` там не сработал бы. Ревью
+# 2026-11-09 показало и вторую причину: grep по подстроке проходил на
+# закомментированном блоке (`// loki.process "drop_old" {`), а конфиг при этом
+# ссылается на несуществующий компонент — Alloy не стартует, сбор логов встаёт
+# целиком, ворота зелёные. Поэтому после grep-ассертов идёт `alloy validate`
+# (синтаксис, свойства, компоненты). Версия валидатора пинится в
+# scripts/bootstrap-tools.sh и обязана совпадать с образом в кластере.
+step "конфиг Alloy: фильтр старых строк и alloy validate"
+ALLOY_RENDERED_CONFIG="${PROJECT_ROOT}/.tmp/rendered/alloy-config/main.alloy"
+mkdir -p "$(dirname "${ALLOY_RENDERED_CONFIG}")"
+python3 - "${ALLOY_RENDERED_CONFIG}" <<'PY'
+import sys
+
+import yaml
+
+out_path = sys.argv[1]
+docs = [
+    d
+    for d in yaml.safe_load_all(open(".tmp/rendered/helmfile.yaml", encoding="utf-8"))
+    if isinstance(d, dict)
+]
+for doc in docs:
+    if doc.get("kind") == "ConfigMap" and (doc.get("metadata") or {}).get("name") == "alloy":
+        config = (doc.get("data") or {}).get("config.alloy")
+        if not config:
+            sys.exit("ConfigMap alloy: нет ключа config.alloy — чарт сменил раскладку ключей")
+        with open(out_path, "w", encoding="utf-8") as handle:
+            handle.write(config)
+        print(f"конфиг Alloy выгружен: {len(config.splitlines())} строк")
+        break
+else:
+    sys.exit("ConfigMap alloy: нет в рендере helmfile")
+PY
+# Без фильтра пересоздание пода Alloy возвращает шум "entry too far behind": Loki
+# отвечает 400 на всё, что старше окна приёма. Проверяется и цепочка — источник
+# обязан писать в drop_old, а drop_old в loki.write; иначе stage.drop окажется в
+# графе, но не на пути данных.
+grep -qE '^loki\.process "drop_old" \{' "${ALLOY_RENDERED_CONFIG}" \
+  || die "в конфиге Alloy нет компонента loki.process drop_old (helm/values/alloy.yaml)"
+# Порог меньше окна приёма Loki (cutoff = newest - max-chunk-age/2 = 1h при дефолтах):
+# при равенстве батч с задержкой уходит за границу и всё равно получает 400.
+grep -qE 'older_than[[:space:]]*=[[:space:]]*"50m"' "${ALLOY_RENDERED_CONFIG}" \
+  || die "в stage.drop нет older_than = \"50m\" — либо старые строки доедут до Loki, либо пропал запас до окна приёма"
+grep -q 'drop_counter_reason = "too_old"' "${ALLOY_RENDERED_CONFIG}" \
+  || die "в stage.drop нет drop_counter_reason = \"too_old\" — счётчик потерь не отличить от прочих"
+grep -q 'forward_to = \[loki.process.drop_old.receiver\]' "${ALLOY_RENDERED_CONFIG}" \
+  || die "loki.source.kubernetes пишет мимо drop_old — фильтр старых строк не работает"
+if ! grep -A2 -E '^loki\.process "drop_old" \{' "${ALLOY_RENDERED_CONFIG}" \
+  | grep -q 'forward_to = \[loki.write.local.receiver\]'; then
+  die "drop_old не передаёт данные в loki.write — логи перестали бы уходить в Loki"
+fi
+alloy validate "${ALLOY_RENDERED_CONFIG}"
+printf 'конфиг Alloy: ассерты и alloy validate — ok\n'
 
 # --- 3b. Метрики Loki/Alloy и хранилище Grafana в рендере ---------------------
 # Правила rules/pipeline.yaml держатся на соглашении о метке job: у Loki шаблон

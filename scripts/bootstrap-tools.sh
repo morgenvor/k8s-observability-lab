@@ -10,6 +10,10 @@ HELMFILE_VERSION="v1.8.2"
 KUBECTL_VERSION="v1.37.2"
 KUBECONFORM_VERSION="v0.8.0"
 PROMETHEUS_VERSION="v3.15.1"   # = версия Prometheus в кластере (kube-prometheus-stack 92.14.1)
+# Alloy нужен только воротам: `alloy validate` разбирает конфиг из рендера чарта
+# (grep синтаксис не проверяет). Версия обязана совпадать с образом в кластере
+# (helm/values/alloy.yaml, alloy.image.tag), иначе ворота валидируют чужой парсер.
+ALLOY_VERSION="v1.21.3"
 HELM_DIFF_VERSION="v3.15.15"
 
 HELM_SHA256="a7f81ce08007091b86d8bd696eb4d86b8d0f2e1b9f6c714be62f82f96a594496"
@@ -17,6 +21,8 @@ HELMFILE_SHA256="f179485c5bb9f8e20fbd8ea16d8807915988aba4d60131ee864fb3232452716
 KUBECTL_SHA256="c04487523e7aa7d1493f7808174c899db93d7a9cf57531420cd76b9bd415f8f4"
 KUBECONFORM_SHA256="9bc2bffbf71f261128533edaf912153948b7ff238f9a531ae6d34466ec287883"
 PROMETHEUS_SHA256="6a726885328ad9efebbf36e876ce2fb6225468a71fd1e7ce3ba666d5f4d97a84"
+# Из SHA256SUMS релиза v1.21.3 (assets: alloy-linux-amd64.zip, 169 МБ).
+ALLOY_SHA256="50d23af2d0f98c00beac6ce9a365693e60f87fb76b6cad6fe1d161e80588af6d"
 HELM_DIFF_SHA256="504e99410611daa70702362e1b10dc74929df8a912cb3f6b5d21d1ee9d0cb7d9"
 
 ARCH="$(uname -m)"
@@ -119,6 +125,22 @@ else
   info "установлен promtool ${PROMETHEUS_VERSION}"
 fi
 
+# `alloy validate` нужен шагу ворот «конфиг Alloy: alloy validate»: он ловит синтаксис,
+# неизвестные свойства и несуществующие компоненты, которых grep не видит.
+# Архив с бинарём — zip (tar-архива в релизах нет), поэтому распаковываем python3.
+if have alloy "${ALLOY_VERSION#v}" alloy --version; then
+  info "alloy ${ALLOY_VERSION} уже установлен"
+else
+  need_cmd python3
+  fetch "https://github.com/grafana/alloy/releases/download/${ALLOY_VERSION}/alloy-linux-${ARCH}.zip" \
+    "${ALLOY_SHA256}" "alloy-linux-${ARCH}.zip"
+  tmp_dir="$(mktemp -d "${DOWNLOAD_DIR}/extract.XXXXXX")"
+  python3 -m zipfile -e "${DOWNLOAD_DIR}/alloy-linux-${ARCH}.zip" "${tmp_dir}"
+  install -m 0755 "${tmp_dir}/alloy-linux-${ARCH}" "${TOOLS_BIN}/alloy"
+  rm -rf "${tmp_dir}"
+  info "установлен alloy ${ALLOY_VERSION}"
+fi
+
 # helm-diff нужен для `helmfile diff/apply`; helmfile template работает и без него.
 # Ставим распаковкой проверенного архива: helm plugin install не принимает локальный .tgz.
 PLUGINS_DIR="${HELM_DATA_HOME}/plugins"
@@ -141,6 +163,7 @@ printf '\n'
 "${TOOLS_BIN}/kubectl" version --client 2>/dev/null | sed -n '1p' | sed 's/^/  /'
 "${TOOLS_BIN}/kubeconform" -v | sed 's/^/  /'
 "${TOOLS_BIN}/promtool" --version | sed -n '1p' | sed 's/^/  /'
+"${TOOLS_BIN}/alloy" --version | sed -n '1p' | sed 's/^/  /'
 "${TOOLS_BIN}/helm" plugin list | sed 's/^/  /'
 
 info "инструменты в ${TOOLS_BIN} (каталог .tools/ вне git); PATH и HELM_*_HOME выставляет scripts/lib.sh:use_tools"
