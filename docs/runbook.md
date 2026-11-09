@@ -295,13 +295,22 @@ kubectl -n monitoring port-forward svc/loki 3100:3100
   у каждого пода свой набор `target=…` в логах, пересечения нет
   (`kubectl -n monitoring logs <alloy-pod> -c alloy | grep -o 'target=[^ ]*' | sort -u`).
   Логи ноды, на которой Alloy не запущен, не собираются — это семантика DaemonSet.
-- Позиции чтения лежат в `/tmp/alloy` (emptyDir) внутри пода: после рестарта Alloy
-  перечитывает логи контейнеров с начала. Чтобы это не превращалось в поток 400
-  `entry too far behind` от Loki (он отбрасывает записи старше уже принятых), на пути
-  данных стоит `loki.process "drop_old"` со `stage.drop { older_than = "1h" }`:
-  строки старше часа не доезжают до Loki и учитываются в
-  `loki_process_dropped_lines_total{reason="too_old"}`. Свежие строки (секундной
-  давности) проходят без потерь, дублей в Loki нет.
+- Позиции чтения лежат в `/tmp/alloy` (emptyDir) внутри пода: после пересоздания пода
+  Alloy перечитывает логи контейнеров с начала. Чтобы это не превращалось в поток
+  400 `entry too far behind` от Loki, на пути данных стоит `loki.process "drop_old"`
+  со `stage.drop { older_than = "50m" }`: строки старше 50 минут не доезжают до Loki
+  и учитываются в `loki_process_dropped_lines_total{reason="too_old"}`.
+  Порог выведен из окна приёма Loki, а не выбран на глаз: в Loki 3.6.x запись
+  отвергается, если она старше `max-chunk-age/2` относительно самой новой принятой
+  в потоке (при дефолтах `unordered-writes: true` и `max-chunk-age: 2h` это
+  1 час), поэтому 50 минут дают запас на батчинг и повторы. Свежие строки
+  (секундной давности) проходят; отдельного замера «сколько строк потеряно/продублировано»
+  нет — на дубли проверялся только механизм дедупликации Loki.
+- `helmfile apply -l name=alloy` **не пересоздаёт поды**: аннотации `checksum/config` в
+  шаблоне чарта 1.15.0 нет (она добавляется только при `configReloader.enabled: false`),
+  а конфиг подхватывает sidecar `config-reloader` (`--reload-url=http://localhost:12345/-/reload`).
+  В его логе видно `Reload triggered`, в логе alloy — `config reloaded`. `rollout restart`
+  нужен не для конфига, а чтобы получить новый emptyDir и перечитывание логов с начала.
 - Retention 72h включает **compactor** (`loki.compactor.retention_enabled: true` +
   `delete_request_store: filesystem`); без них `limits_config.retention_period` не
   действует и PVC 5Gi забивается. Данные на PVC — логи, не источник истины:
@@ -320,8 +329,10 @@ kubectl -n monitoring port-forward svc/loki 3100:3100
   иначе под уйдёт в `ImagePullBackOff`.
 - Часть этих гарантий проверяется офлайн: шаг «семантика значений Loki/Alloy» в
   `./scripts/check.sh` падает, если из рендера пропали `retention_period: 72h`,
-  `retention_enabled: true`, push-URL, фильтр по ноде, цепочка `stage.drop` →
-  `loki.write`, или вернулись canary/кеши.
+  `retention_enabled: true`, push-URL, фильтр по ноде, или вернулись canary/кеши;
+  шаг «конфиг Alloy: фильтр старых строк и alloy validate» дополнительно проверяет
+  сам конфиг бинарём Alloy той же версии, что образ в кластере: синтаксис, неизвестные
+  свойства и несуществующие компоненты.
 
 ### Правила Loki ruler (фаза 5 v1.1)
 
@@ -490,16 +501,16 @@ curl -s http://127.0.0.1:9090/api/v1/rules | jq '.data.groups[] | select(.name|s
   метку `release=monitoring` у PrometheusRule `demo-slo-alerts`. `scripts/deploy.sh`
   проверяет тот же селектор сразу после apply, чтобы неверный формат метки не дал
   ложный page (проверка через 10 минут после apply — раздел «Приёмка после деплоя»).
-- Своих инфраструктурных правил десять: `KubePodOOMKilled`, `PVCNearlyFull` (>85 %
+- Своих инфраструктурных правил одиннадцать: `KubePodOOMKilled`, `PVCNearlyFull` (>85 %
   занято, без прогноза роста) и `NodeMemoryAvailableLow` (<15 % свободной памяти узла)
-  в `rules/infra.yaml` плюс семь правил пайплайна логов в `rules/pipeline.yaml`
+  в `rules/infra.yaml` плюс восемь правил пайплайна логов в `rules/pipeline.yaml`
   (список — следующим пунктом). Остальная инфраструктура (узлы, диски, `TargetDown`,
   перезагрузка конфига Prometheus, сбои уведомлений Alertmanager) приходит от чарта
   kube-prometheus-stack: её `runbook_url` указывает на runbooks.prometheus-operator.dev.
-- Пайплайн логов — `rules/pipeline.yaml` (PrometheusRule `demo-logs-pipeline`), 7 правил:
+- Пайплайн логов — `rules/pipeline.yaml` (PrometheusRule `demo-logs-pipeline`), 8 правил:
   `LokiDown` и `LokiTargetMissing` (ticket), `LokiNotIngesting` (info),
-  `AlloyDown`, `AlloyTargetMissing`, `AlloyCoverageIncomplete`, `AlloyDroppedLogs`
-  (ticket). Пара «цель есть, но не отвечает» (`up == 0`) и «цели нет вовсе»
+  `AlloyDown`, `AlloyTargetMissing`, `AlloyCoverageIncomplete`, `AlloyDroppedLogs`,
+  `AlloyOldLogsDropped` (ticket). Пара «цель есть, но не отвечает» (`up == 0`) и «цели нет вовсе»
   (`absent(up)`) — разные сигналы: при удалённом поде/объекте серия `up` исчезает, и
   `up == 0` не сработает никогда. Проверка логики — `rules/tests/pipeline.test.yaml`
   (promtool); живая проверка «Loki пропал» 2026-11-07 дала firing `LokiTargetMissing`
@@ -705,7 +716,7 @@ kubectl -n demo get endpointslices -l kubernetes.io/service-name=demo-api \
 | `kubectl top` пусто | нет metrics-server | для headroom смотреть `kubectl describe node` (Allocated resources) |
 | `loki-0` или `alloy` в `ImagePullBackOff` | нода не скачала образ из docker.io (таймаут CloudFront) | `IMPORT_IMAGES="<образ>" ./scripts/import-image.sh`: tar кладётся на ноду и импортируется локально |
 | `loki-0` `Pending` с пустым PVC | `local-path` провижинит том только после планирования пода | `kubectl -n monitoring describe pvc storage-loki-0` — событие `WaitForFirstConsumer`; если `Provisioning` нет, смотреть под `local-path-provisioner` в `kube-system` |
-| в Alloy `entry too far behind, dropping data` | либо в живом конфиге Alloy нет `stage.drop` (правка `helm/values/alloy.yaml` не применена), либо строка моложе часа, но Loki её уже принял (пересечение батчей) | проверить `GET /api/v1/status` Alloy или `kubectl -n monitoring get cm alloy -o yaml`; счётчик `loki_process_dropped_lines_total{reason="too_old"}` должен расти после рестарта, а 400 — нет; дублей в Loki нет, свежие строки не теряются |
+| в Alloy `entry too far behind, dropping data` | в живом конфиге нет `stage.drop` (правка `helm/values/alloy.yaml` не применена или снята), либо порог `older_than` снова равен окну приёма Loki (1 ч) и батч с задержкой уходит за границу | проверить `kubectl -n monitoring get cm alloy -o yaml` (должно быть `older_than = "50m"` и `Reload triggered` в логе `config-reloader`); счётчик `loki_process_dropped_lines_total{reason="too_old"}` должен расти после рестарта, а 400 — нет |
 | дашборда/панели логов нет в Grafana | datasource `loki` не подхвачен sidecar | `kubectl -n monitoring logs deploy/monitoring-grafana -c grafana-sc-datasources \| tail`, `GET /api/datasources` — должен быть `loki` |
 | Loki отвечает 400 на push | `limits_config` (например, отбрасывание старых записей) или `schemaConfig` не совпадает с хранилищем | `kubectl -n monitoring port-forward svc/loki 3100:3100`, затем `GET /config`, логи `loki-0` |
 | Grafana `Init:ImagePullBackOff` на `init-chown-data` | чарт добавил init-контейнер `busybox:1.38.0` (chown PVC), а в registry лабы его нет | `IMPORT_IMAGES="busybox:1.38.0" ./scripts/import-image.sh` |
@@ -713,6 +724,7 @@ kubectl -n demo get endpointslices -l kubernetes.io/service-name=demo-api \
 | горит `LokiTargetMissing` / `AlloyTargetMissing` | цели нет: удалён объект, выключен `ServiceMonitor`, у Service нет эндпоинтов | `kubectl -n monitoring get servicemonitor loki alloy`, `get endpoints loki alloy`, `get sts loki`/`get ds alloy` |
 | горит `LokiDown` / `AlloyDown` | цель есть, но `/metrics` не отвечает: зависший процесс, лимит памяти, ошибка контейнера | `kubectl -n monitoring logs <pod> --tail=50`, `describe pod`, `kubectl top pod` |
 | горит `AlloyDroppedLogs` | Alloy выбрасывает записи: `queue_is_full` (Loki не успевает), `rate_limited`, `ingester_error` | `kubectl -n monitoring logs ds/alloy`, метрика по `reason`, проверить `LokiNotIngesting` и PVC Loki |
+| горит `AlloyOldLogsDropped` | `stage.drop` отбрасывает строки старше 50 минут непрерывно дольше 30 минут: уехали часы, неверный порог `older_than`, отстало чтение логов | сравнить timestamp последней строки с `time()`, `kubectl -n monitoring get cm alloy -o jsonpath='{.data.config\.alloy}'`, ошибки чтения в логах контейнера `alloy`, `ssh` на ноду → `date -u` |
 | горит `LokiNotIngesting` | строки не доходят до Loki при живом процессе: сломан Alloy, RBAC, сеть или в namespace просто тихо | `kubectl -n monitoring logs ds/alloy --tail=50`, запрос `{namespace="demo"}` в Grafana, `up{job="alloy"}` |
 
 ## 7. Реакция на алерты
@@ -875,11 +887,11 @@ kube-prometheus-stack.
 
 ### Пайплайн логов
 
-Семь правил `rules/pipeline.yaml`: `LokiDown`, `LokiTargetMissing`,
+Восемь правил `rules/pipeline.yaml`: `LokiDown`, `LokiTargetMissing`,
 `LokiNotIngesting`, `AlloyDown`, `AlloyTargetMissing`, `AlloyCoverageIncomplete`,
-`AlloyDroppedLogs`. Ключевое различие: `*Down` — цель есть, но `/metrics` не отвечает
-(`up == 0`); `*TargetMissing` — цели нет вовсе (`absent(up)`), то есть удалён
-объект/`ServiceMonitor` или у Service нет эндпоинтов.
+`AlloyDroppedLogs`, `AlloyOldLogsDropped`. Ключевое различие: `*Down` — цель есть, но
+`/metrics` не отвечает (`up == 0`); `*TargetMissing` — цели нет вовсе (`absent(up)`),
+то есть удалён объект/`ServiceMonitor` или у Service нет эндпоинтов.
 
 - `LokiDown`/`LokiTargetMissing` (ticket): `kubectl -n monitoring get sts loki`,
   `get endpoints loki`, `kubectl -n monitoring logs loki-0 --tail=100`,
@@ -893,6 +905,15 @@ kube-prometheus-stack.
 - `AlloyDroppedLogs` (ticket): `loki_write_dropped_entries_total` растёт. Причина в
   метке `reason` (`queue_is_full` — Loki не успевает, `rate_limited`, `ingester_error`).
   Это потеря, а не задержка: `sum by (reason) (rate(loki_write_dropped_entries_total[10m]))`.
+- `AlloyOldLogsDropped` (ticket): растёт `loki_process_dropped_lines_total{reason="too_old"}`
+  дольше 30 минут. Всплеск сразу после пересоздания пода Alloy — норма (логи
+  перечитываются с начала, всё старше 50 минут отсекает `stage.drop`); тревожно
+  длительное ровное поступление. Сначала сравни timestamp строки в логе с `time()`:
+  если часы на ноде или в поде уехали вперёд, «старыми» становятся живые строки.
+  Затем проверь порог `older_than` в живом ConfigMap `alloy` и не отстало ли чтение
+  логов (ошибки чтения в логе контейнера `alloy`). Цена ошибки — потеря логов
+  `demo`/`monitoring` без других симптомов: `up`, `loki_write_dropped_*` и Loki
+  при этом здоровы.
 - `LokiNotIngesting` (info): distributor 15 минут не принимал строк, и так уже 30
   минут при живом процессе. Смотри Alloy, push-URL `loki.monitoring.svc:3100` и фильтр
   `__meta_kubernetes_pod_node_name`; возможно, в `demo`/`monitoring` просто тихо.
