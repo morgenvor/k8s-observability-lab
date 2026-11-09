@@ -69,9 +69,27 @@ alloy:
         }
       }
 
+      // Отсекаем строки старше часа — до записи в Loki, а не после отказа.
+      // Причина: позиции чтения лежат в emptyDir, после рестарта пода Alloy перечитывает
+      // лог контейнера с начала, и Loki отвечает "entry too far behind" на всё, что старше
+      // принятого. Это 400 на батч и шум в логе, пользы — ноль: строки часовой давности
+      // для дриллов и диагностики не нужны. Живые строки (секунды) проходят без потерь.
+      // Почему не том: hostPath требует root (запрещено решением AGENTS), а PVC в
+      // DaemonSet без отдельного PV на ноду не масштабируется на вторую ноду.
+      // Почему не retention in Loki: он отбрасывает уже принятое, а ошибку на приёме
+      // ("entry too far behind") это не снимает.
+      loki.process "drop_old" {
+        forward_to = [loki.write.local.receiver]
+
+        stage.drop {
+          older_than          = "1h"
+          drop_counter_reason = "too_old"
+        }
+      }
+
       loki.source.kubernetes "pod_logs" {
         targets    = discovery.relabel.pod_logs.output
-        forward_to = [loki.write.local.receiver]
+        forward_to = [loki.process.drop_old.receiver]
       }
 
       loki.write "local" {

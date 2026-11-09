@@ -296,9 +296,12 @@ kubectl -n monitoring port-forward svc/loki 3100:3100
   (`kubectl -n monitoring logs <alloy-pod> -c alloy | grep -o 'target=[^ ]*' | sort -u`).
   Логи ноды, на которой Alloy не запущен, не собираются — это семантика DaemonSet.
 - Позиции чтения лежат в `/tmp/alloy` (emptyDir) внутри пода: после рестарта Alloy
-  перечитывает логи контейнеров с начала, а Loki отбрасывает старые записи
-  (`entry too far behind`, 400 в логе Alloy). Дублей в Loki нет — это шум, не потеря
-  свежих логов.
+  перечитывает логи контейнеров с начала. Чтобы это не превращалось в поток 400
+  `entry too far behind` от Loki (он отбрасывает записи старше уже принятых), на пути
+  данных стоит `loki.process "drop_old"` со `stage.drop { older_than = "1h" }`:
+  строки старше часа не доезжают до Loki и учитываются в
+  `loki_process_dropped_lines_total{reason="too_old"}`. Свежие строки (секундной
+  давности) проходят без потерь, дублей в Loki нет.
 - Retention 72h включает **compactor** (`loki.compactor.retention_enabled: true` +
   `delete_request_store: filesystem`); без них `limits_config.retention_period` не
   действует и PVC 5Gi забивается. Данные на PVC — логи, не источник истины:
@@ -317,7 +320,8 @@ kubectl -n monitoring port-forward svc/loki 3100:3100
   иначе под уйдёт в `ImagePullBackOff`.
 - Часть этих гарантий проверяется офлайн: шаг «семантика значений Loki/Alloy» в
   `./scripts/check.sh` падает, если из рендера пропали `retention_period: 72h`,
-  `retention_enabled: true`, push-URL, фильтр по ноде, или вернулись canary/кеши.
+  `retention_enabled: true`, push-URL, фильтр по ноде, цепочка `stage.drop` →
+  `loki.write`, или вернулись canary/кеши.
 
 ### Правила Loki ruler (фаза 5 v1.1)
 
@@ -701,7 +705,7 @@ kubectl -n demo get endpointslices -l kubernetes.io/service-name=demo-api \
 | `kubectl top` пусто | нет metrics-server | для headroom смотреть `kubectl describe node` (Allocated resources) |
 | `loki-0` или `alloy` в `ImagePullBackOff` | нода не скачала образ из docker.io (таймаут CloudFront) | `IMPORT_IMAGES="<образ>" ./scripts/import-image.sh`: tar кладётся на ноду и импортируется локально |
 | `loki-0` `Pending` с пустым PVC | `local-path` провижинит том только после планирования пода | `kubectl -n monitoring describe pvc storage-loki-0` — событие `WaitForFirstConsumer`; если `Provisioning` нет, смотреть под `local-path-provisioner` в `kube-system` |
-| в Alloy `entry too far behind, dropping data` | новый tailer перечитывает логи контейнера с начала, Loki отбрасывает записи старше уже принятых | это шум после рестарта Alloy, дублей в Loki нет; позиции и так лежат в `emptyDir /tmp/alloy`, поэтому томом это не лечится — источник шума снимается отбрасыванием старых строк на стороне Alloy (`stage.drop`, фаза 6 плана v1.1) |
+| в Alloy `entry too far behind, dropping data` | либо в живом конфиге Alloy нет `stage.drop` (правка `helm/values/alloy.yaml` не применена), либо строка моложе часа, но Loki её уже принял (пересечение батчей) | проверить `GET /api/v1/status` Alloy или `kubectl -n monitoring get cm alloy -o yaml`; счётчик `loki_process_dropped_lines_total{reason="too_old"}` должен расти после рестарта, а 400 — нет; дублей в Loki нет, свежие строки не теряются |
 | дашборда/панели логов нет в Grafana | datasource `loki` не подхвачен sidecar | `kubectl -n monitoring logs deploy/monitoring-grafana -c grafana-sc-datasources \| tail`, `GET /api/datasources` — должен быть `loki` |
 | Loki отвечает 400 на push | `limits_config` (например, отбрасывание старых записей) или `schemaConfig` не совпадает с хранилищем | `kubectl -n monitoring port-forward svc/loki 3100:3100`, затем `GET /config`, логи `loki-0` |
 | Grafana `Init:ImagePullBackOff` на `init-chown-data` | чарт добавил init-контейнер `busybox:1.38.0` (chown PVC), а в registry лабы его нет | `IMPORT_IMAGES="busybox:1.38.0" ./scripts/import-image.sh` |

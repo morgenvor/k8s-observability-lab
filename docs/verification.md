@@ -117,6 +117,8 @@ rules` — `SUCCESS`. Чарты снова из локальных копий (
 | 2026-11-09 | Loki ruler: фильтр `/ready` в живом правиле | `kubectl apply -k deploy/loki-rules` (ConfigMap правил), `/prometheus/api/v1/rules` Loki | правка доехала до пода **без рестарта** (контейнер поднят 08:55:31Z, правка применена 09:35Z, `restartCount` не изменился): `route!="/ready"` в выражении, `health: ok`; пересборка образов и `helmfile apply` не нужны — правило приезжает томом |
 | 2026-11-09 | Loki ruler: срабатывание и доставка до sink | временное правило `LogPathProbe` в том же ConfigMap, `/prometheus/api/v1/rules`, `/timeline` приёмника | загружено 09:36:04Z, `firing` 09:36:14Z, запись в `/timeline` 09:36:22Z (`status=firing`, метки `severity=ticket`, `probe=loki-path`); пробное правило удалено 09:36:24Z и выгружено из ruler к 09:37:44Z — путь «ruler → Alertmanager → `alert-sink`» доказан на реальных логах |
 | 2026-11-09 | Loki ruler: `resolved` до sink | `/timeline` приёмника | после удаления пробного правила пришла запись `2026-11-09T09:40:22.084Z` `status=resolved` для `LogPathProbe` — ветка `sendResolved: true` webhook-приёмника работает и для алертов ruler |
+| 2026-11-09 | Alloy: старые строки не доезжают до Loki | `helmfile apply -l name=alloy` (ревизия 5) + `kubectl -n monitoring rollout restart ds/alloy`, затем логи Loki и `/metrics` Alloy через Prometheus | после пересоздания подов (emptyDir новый, логи перечитаны с начала) за 8 минут в Loki **0** строк `entry too far behind` и в логах Alloy **0** ответов 400; на пути данных `loki.process "drop_old"` отбросил `loki_process_dropped_lines_total{reason="too_old"}` = **14 293** строки (13 639 на одной ноде, 654 на другой), счётчик после первичного перечитывания не растёт — отбрасываются только старые записи, свежие идут как раньше |
+| 2026-11-09 | `retentionSize` Prometheus: замер | `/api/v1/status/tsdb`, `prometheus_tsdb_*`, `/api/v1/status/flags` через port-forward | `storage.tsdb.retention.time=3d`, `size=5GiB` (`retention_limit_bytes = 5 368 709 120`); 10 блоков = **673 MiB**, WAL **121 MiB**, `head_chunks_storage` **12 MiB**, head-серий 106 786 при 221 174 чанках — данные занимают ≈**806 MiB**, то есть ~16 % лимита; сэмплы последних суток есть на 24, 48 и 90 ч назад, а на 60–80 ч — нет (стенд был выключен); `kubelet_volume_stats_*` для этого PVC показывает файловую систему ноды (20,9 GB), а не квоту, поэтому размер тома оценивался по метрикам TSDB. Решение: `retentionSize` **оставить 5GB** |
 
 Как проверить это повторно (временное правило по реальному трафику, без выдуманных строк
 и без правки кода) — раздел «Правила Loki ruler» в `docs/runbook.md`.
@@ -143,9 +145,6 @@ rules` — `SUCCESS`. Чарты снова из локальных копий (
   `request_aborted` (499) — ни то, ни другое под условие `status >= 500` не попадает.
   Чтобы правило горело на настоящем 5xx, нужна инъекция 5xx в `demo-api` (отдельный
   маршрут) и свой дрилл — это записано в «Идеи после v1.1»;
-- `stage.drop` Alloy: отсутствие `entry too far behind` после рестарта и рост счётчика
-  отброшенных строк;
-- замер `retentionSize` TSDB (оставить 5 GB или понизить);
 - прогон workflow `ci` на GitHub (подтверждает владелец, ссылка на run — в CHANGELOG).
 
 Дополнительно известно и не проверяется: slow-burn алерт (1x / 3d) требует трёх суток

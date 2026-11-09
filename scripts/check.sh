@@ -93,6 +93,23 @@ grep -q 'loki.monitoring.svc:3100/loki/api/v1/push' .tmp/rendered/helmfile.yaml 
 # Каждая реплика Alloy обязана читать только свою ноду, иначе логи собираются дважды.
 grep -q '__meta_kubernetes_pod_node_name' .tmp/rendered/helmfile.yaml \
   || die "в конфиге Alloy нет фильтра по ноде — DaemonSet будет читать все поды каждой репликой"
+# Отбрасывание старых строк (фаза 6): без него рестарт пода Alloy возвращает шум
+# "entry too far behind" — Loki отвечает 400 на всё, что старше уже принятого.
+# Проверяется не только наличие stage.drop, но и цепочка: источник обязан писать в
+# drop_old, а drop_old — в loki.write. Иначе stage.drop окажется в графе, но не на
+# пути данных, и шум вернётся при зелёных воротах.
+grep -q 'loki.process "drop_old"' .tmp/rendered/helmfile.yaml \
+  || die "в конфиге Alloy нет loki.process drop_old (helm/values/alloy.yaml)"
+grep -qE 'older_than[[:space:]]*=[[:space:]]*"1h"' .tmp/rendered/helmfile.yaml \
+  || die "в stage.drop нет older_than = \"1h\" — старые строки снова доедут до Loki"
+grep -q 'drop_counter_reason = "too_old"' .tmp/rendered/helmfile.yaml \
+  || die "в stage.drop нет drop_counter_reason = \"too_old\" — счётчик потерь не отличить от прочих"
+grep -q 'forward_to = \[loki.process.drop_old.receiver\]' .tmp/rendered/helmfile.yaml \
+  || die "loki.source.kubernetes пишет мимо drop_old — фильтр старых строк не работает"
+grep -qE 'loki\.process "drop_old"' .tmp/rendered/helmfile.yaml \
+  && grep -A2 'loki.process "drop_old"' .tmp/rendered/helmfile.yaml \
+    | grep -q 'forward_to = \[loki.write.local.receiver\]' \
+  || die "drop_old не передаёт данные в loki.write — логи перестали бы уходить в Loki"
 # Выключенное в values не должно появиться в рендере.
 for disabled in loki-canary chunks-cache results-cache; do
   if grep -q "${disabled}" .tmp/rendered/helmfile.yaml; then
