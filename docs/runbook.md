@@ -335,8 +335,15 @@ kubectl -n demo port-forward svc/alert-sink 8080:8080   # → http://127.0.0.1:8
 
 - Один файл правила — `deploy/loki-rules/demo-api-5xx.yaml` (`DemoApi5xxFromLogs`,
   `severity: ticket`): `sum(count_over_time({namespace="demo", app="demo-api"} | json |
-  status >= 500 [5m])) > 0`, `for: 2m`. Применяется с остальными манифестами
-  (`./scripts/deploy.sh`) — kustomize отдаёт его как ConfigMap `loki-rules`.
+  status >= 500 | route != "/ready" [5m])) > 0`, `for: 2m`. Применяется с остальными
+  манифестами (`./scripts/deploy.sh`) — kustomize отдаёт его как ConfigMap `loki-rules`.
+- **`/ready` из подсчёта исключён намеренно.** На SIGTERM `demo-api` сразу отвечает
+  `/ready` → 503, чтобы под убрали из endpoints; это штатный дренаж, а не отказ клиенту.
+  Одна такая строка держится в окне `5m`, `for: 2m` выполняется — и без фильтра правило
+  горело бы `ticket` на каждом деплое, `rollout restart` и дрилле `oomkill` (проверено
+  на живых данных 2026-11-09: единственная 5xx-строка за 72 ч — именно `/ready` при
+  SIGTERM). Дрилл `errors` правило не проверяет и не должен: `reset_peer` рвёт соединение
+  до приложения, и 5xx в логах не появляется.
 - **Тенант в пути — не опечатка.** Локальное хранилище правил читает
   `<directory>/<tenant>/<файл>`, а при `auth_enabled: false` тенант всегда `fake`.
   Поэтому том смонтирован в `/etc/loki/rules/fake`, и новый файл правила обязан

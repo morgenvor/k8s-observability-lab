@@ -672,6 +672,15 @@ expr = rule.get("expr") or ""
 for token in ("count_over_time(", '{namespace="demo", app="demo-api"}', "| json", "status >= 500"):
     if token not in expr:
         fail(f"DemoApi5xxFromLogs: в expr нет {token!r} — правило считает не то, что задумано")
+# Штатный дренаж пода отвечает /ready → 503, и без фильтра правило горит ticket на
+# каждом деплое и рестарте (проверено на живых данных 2026-11-09: единственная 5xx-строка
+# за 72 ч — именно /ready при SIGTERM). Ассерт держит фильтр от случайного удаления.
+if 'route != "/ready"' not in expr:
+    fail(
+        "DemoApi5xxFromLogs: из expr пропал фильтр 'route != \"/ready\"'. Без него 503"
+        " самопроверки готовности при SIGTERM даёт ложный ticket на каждом рестарте пода"
+        " (см. комментарий в deploy/loki-rules/demo-api-5xx.yaml)"
+    )
 labels = rule.get("labels") or {}
 if labels.get("severity") != "ticket":
     fail(
