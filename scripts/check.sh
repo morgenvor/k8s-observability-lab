@@ -759,6 +759,33 @@ PY
 grep -q 'name: loki-rules' "${OVERLAY_RENDER}" \
   || die "в оверлее деплоя нет ConfigMap loki-rules — проверь список resources в scripts/lib.sh (render_demo_manifests)"
 
+# --- 4e. Связка Alertmanager и AlertmanagerConfig -----------------------------
+# Маршрут проверен выше детально, но это проверка файла, а не того, что Alertmanager
+# его прочитает. Селекторы и matcherStrategy офлайн не видит kubeconform
+# (--ignore-missing-schemas), а дефолт оператора (OnNamespace) молча отрезает конфиг
+# из monitoring: маршрут валиден, все проверки зелёные, письма и sink не получают
+# ничего. Поэтому проверяется сам CR Alertmanager.
+step "связка Alertmanager и AlertmanagerConfig"
+python3 "${PROJECT_ROOT}/scripts/checks/alertmanager_wiring.py" \
+  .tmp/rendered/helmfile.yaml .tmp/rendered/kustomize.yaml
+
+# --- 4f. Размещение правил: метки, namespace, членство в kustomization --------
+# Выгрузка для promtool берёт только spec.groups, поэтому метка release=monitoring и
+# namespace проверяются здесь: без метки оператор правило не загрузит, а promtool,
+# unit-тесты и проверка ссылок останутся зелёными. Членство ловит файл, забытый в
+# rules/kustomization.yaml: ворота его проверят, kustomize не применит.
+step "размещение правил (метки, namespace, членство)"
+python3 "${PROJECT_ROOT}/scripts/checks/rule_placement.py" \
+  .tmp/rendered/helmfile.yaml .tmp/rendered/kustomize.yaml rules rules/kustomization.yaml
+
+# --- 4g. Паритет оверлея деплоя и kustomization.yaml --------------------------
+# Два пути деплоя: `kubectl apply -k .` и scripts/deploy.sh (список каталогов руками в
+# render_demo_manifests). Новый каталог в deploy/, добавленный только в один из них,
+# даёт разное состояние кластера в зависимости от того, чем деплоили.
+step "паритет оверлея деплоя и kustomization"
+python3 "${PROJECT_ROOT}/scripts/checks/overlay_parity.py" \
+  .tmp/rendered/kustomize.yaml "${OVERLAY_RENDER}"
+
 # --- 5. Правила Prometheus: синтаксис и юнит-тесты ---------------------------
 # promtool не умеет читать PrometheusRule CRD («field apiVersion not found in type
 # rulefmt.RuleGroups»), а правила обязаны быть CRD: оператор находит их по метке

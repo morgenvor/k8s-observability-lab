@@ -7,6 +7,10 @@ node_modules/
 dist/
 npm-debug.log*
 
+# Python: байткод ассертов в scripts/checks (восстанавливается запуском)
+__pycache__/
+*.pyc
+
 # Образы и архивы
 *.tar
 *.tgz
