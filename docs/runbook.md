@@ -529,7 +529,9 @@ kubectl -n monitoring get secret alertmanager-monitoring-kube-prometheus-alertma
   | sed -E 's/auth_password:.*/auth_password: <скрыт>/' | grep -A3 webhook_configs
 # уведомления, которые дошли до получателя (кольцо последних 200, память пода)
 kubectl -n demo port-forward svc/alert-sink 8080:8080
-#   http://127.0.0.1:8080/timeline — JSON-лента {received_at, status, group_key, alerts}
+#   http://127.0.0.1:8080/timeline — JSON-лента {received_at, status, group_key,
+#                                    truncated_alerts, alerts}; поля и выборки —
+#                                    подраздел «Чтение /timeline» ниже
 #   http://127.0.0.1:8080/metrics  — alertsink_notifications_total{status,severity},
 #                                    alertsink_alert_events_total{alertname,status}
 ```
@@ -554,6 +556,54 @@ kubectl -n demo port-forward svc/alert-sink 8080:8080
   письмом: это отказ компонентов стека, а не шум. `KubeControllerManagerDown`,
   `KubeSchedulerDown`, `KubeProxyDown` в этом стенде не появляются — компоненты выключены
   в `helm/values/kps.yaml` (в k3s у них нет своих целей).
+
+### Чтение `/timeline`
+
+`/timeline` — журнал доставленного, а не состояние Alertmanager: историю отправок
+Alertmanager не хранит (`/api/v2/alerts` показывает только текущее). Отдаётся целиком
+одним JSON-массивом, новые записи в конце. Поля записи:
+
+- `received_at` — когда sink принял уведомление (UTC);
+- `status` — `firing`/`resolved` на уровне группы;
+- `group_key` — ключ группы Alertmanager;
+- `truncated_alerts` — сколько алертов отбросил `maxAlerts: 50` (0 — не отбрасывал); без
+  этого поля усечённая группа выглядит полной;
+- `alerts[]` — `name`, `status`, `labels`, `starts_at`, `ends_at`.
+
+Port-forward — из блока выше: `kubectl -n demo port-forward svc/alert-sink 8080:8080`.
+
+```bash
+# весь журнал: одна строка на уведомление
+curl -s http://127.0.0.1:8080/timeline \
+  | jq -r '.[] | "\(.received_at)  \(.status)  \(.alerts|map(.name+":"+.status)|join(","))"'
+
+# чего на почте не будет по маршруту: всё, кроме page/critical
+curl -s http://127.0.0.1:8080/timeline \
+  | jq -r '.[] | .alerts[] | select((.labels.severity // "none") as $s
+           | $s != "page" and $s != "critical")
+           | "\(.name)\t\(.labels.severity // "нет")\t\(.status)"'
+
+# что ушло письмом: эти записи тоже здесь (ветки e-mail с continue + catch-all)
+curl -s http://127.0.0.1:8080/timeline \
+  | jq -r '.[] | .alerts[] | select(.labels.severity == "page" or .labels.severity == "critical")
+           | "\(.name)\t\(.labels.severity)\t\(.status)"'
+
+# heartbeat маршрута: последние приходы Watchdog (none, раз в 4 ч)
+curl -s http://127.0.0.1:8080/timeline \
+  | jq -r '.[] | select(any(.alerts[]; .name=="Watchdog")) | .received_at' | tail -3
+
+# усечённые группы (Alertmanager обрезал по maxAlerts: 50)
+curl -s http://127.0.0.1:8080/timeline | jq '[.[] | select(.truncated_alerts > 0)]'
+```
+
+Три вещи, которые легко принять за поломку:
+
+- **пусто при живом sink** — это сигнал, а не «всё хорошо»: порядок разбора — в разделе
+  «Путь уведомлений», первым делом `alertsink_last_notification_timestamp_seconds`;
+- **`firing` без `resolved`** — норма для правил, у которых метрика отдаёт последнее
+  завершение контейнера (`KubePodOOMKilled`, см. `rules/infra.yaml`);
+- **кольцо живёт в памяти пода** (≤200 записей и ≤4 MiB): после рестарта sink журнал пуст,
+  и до 4 ч `AlertSinkHeartbeatMissing` слеп.
 
 ### E-mail (SMTP): page и critical
 
@@ -976,7 +1026,9 @@ kube-prometheus-stack.
 
 1. `curl -s http://127.0.0.1:8080/metrics` (port-forward `svc/alert-sink`) —
    `alertsink_last_notification_timestamp_seconds`, `alertsink_process_start_time_seconds`.
-2. `/timeline` — пусто или старые записи? Пусто при живом sink → маршрут.
+2. `/timeline` — пусто или старые записи? Пусто при живом sink → маршрут. Как прочитать
+   журнал (поля записи, выборки по `severity`, `truncated_alerts`, heartbeat) — подраздел
+   «Чтение `/timeline`» в разделе «Маршрут уведомлений и alert-sink».
 3. `kubectl -n monitoring get alertmanagerconfig`, затем сгенерированный конфиг:
    `kubectl -n monitoring get secret alertmanager-monitoring-kube-prometheus-alertmanager-generated -o jsonpath='{.data.alertmanager\.yaml\.gz}' | base64 -d | gunzip | grep -A3 webhook_configs`
    — маршрут на месте? В действующем конфиге это дерево: ветка `AlertSink.*` → `email`,
