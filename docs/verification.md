@@ -14,6 +14,31 @@
 
 ## Офлайн-ворота
 
+**2026-11-09, `./scripts/check.sh --strict --smoke` на HEAD `b6e589b`: `OK`, код возврата
+0, пропусков нет.** Прогон после выноса ассертов в `scripts/checks/`: шагов стало на
+четыре больше (три новых ассерта и smoke фикстуры), ни один не ушёл в «пропущено».
+
+| Шаг | Результат |
+|---|---|
+| yamllint | 30 файлов |
+| `npm ci` + тесты приложений | 48 тестов (те же наборы, что и раньше) |
+| `helmfile template` всех релизов → `kubeconform` | 134 объекта: `Valid: 89`, `Invalid: 0`, `Skipped: 45` |
+| `kustomize` → `kubeconform` | 23 объекта: `Valid: 13`, `Invalid: 0`, `Skipped: 10` |
+| ассерты рендера (Loki/Alloy, Ingress, маршрут, ruler) | ok — те же проверки, что до выноса |
+| **связка Alertmanager и AlertmanagerConfig** | ok (`matcherStrategy.type=None`, оба селектора пусты, конфиг в `monitoring` с `apiVersion` `v1alpha1`) |
+| **размещение правил** | ok (6 `PrometheusRule`: метки под `ruleSelector`, namespace рядом с оператором, членство совпадает с `rules/kustomization.yaml`) |
+| **паритет оверлея деплоя** | ok (23 объекта в `kustomize.yaml` = 23 в рендере `deploy.sh`) |
+| `promtool check rules` | 6 файлов выгрузки: 2+2+2+1+1+2 группы |
+| `promtool test rules` | 6 наборов, `SUCCESS` (6/20/3/3/3/8 правил) |
+| ссылки в алертах | `runbook_url 24, dashboard_url 6`, анкоров в runbook 26 |
+| **smoke фикстуры в docker** (`--smoke`) | три образа собраны, `/healthz`, `/ready`, `/metrics` (бакет `0.3`), рост `load_requests_total{outcome="ok"}` за 10 с, JSON-логи → `SMOKE OK` |
+| скан секретов и адресов | совпадений нет, 10 адресов — все `example.invalid`/`example.com` |
+
+Без флагов тот же HEAD даёт `OK` и не требует docker: `--smoke` — единственное, что
+запускает контейнеры. Негативные прогоны новых ассертов (мутации рендера: `OnNamespace`,
+непустой селектор, снятая метка `release`, `pipeline.yaml` вне `resources`, оверлей без
+объекта) — все пять падают с ожидаемым сообщением; подробности в `CHANGELOG.md`.
+
 **2026-11-07, `./scripts/check.sh --images` на HEAD `b8ef241`: `OK`, код возврата 0,
 пропусков нет** (ни один шаг не ушёл в «пропущено»: `docker`, `shellcheck` и `yamllint`
 были на месте).
