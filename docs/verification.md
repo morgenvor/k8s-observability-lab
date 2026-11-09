@@ -114,6 +114,11 @@ rules` — `SUCCESS`. Чарты снова из локальных копий (
 | 2026-11-08 | доставка в приёмник | `/timeline`, `alertsink_*` | 4 уведомления: 2 × `Watchdog` (`none`), `EmailProbePage` (`page`, пришёл через catch-all), `EmailProbeTicket` (`ticket`) |
 | 2026-11-08 | Loki ruler: загрузка правила | `helmfile apply -l name=loki` (ревизия 4), `/prometheus/api/v1/rules` Loki (порт 3100) | группа `demo-api-logs`, файл `demo-api-5xx.yaml`, `interval: 60`, правило `DemoApi5xxFromLogs` `health: ok`, метки `severity=ticket`, `service=demo-api`; рестарт пода Loki прошёл без ошибок старта |
 | 2026-11-08 | Loki ruler: оценка и путь до Alertmanager | `/metrics` Loki, `/config` Loki | `loki_prometheus_rule_evaluations_total{rule_group="…;demo-api-logs"} = 2`, `…_failures_total = 0`; `ruler.alertmanager_url` = Service Alertmanager, `enable_api: true`, `storage.local.directory: /etc/loki/rules`, `rule_path: /tmp/loki-rules`; `loki_prometheus_notifications_alertmanagers_discovered{alertmanager="…/api/v2/alerts"} = 1`, `sent_total = 0` (гореть нечему) |
+| 2026-11-09 | Loki ruler: фильтр `/ready` в живом правиле | `kubectl apply -k deploy/loki-rules` (ConfigMap правил), `/prometheus/api/v1/rules` Loki | правка правила доехала до пода **без рестарта**: `route!="/ready"` в выражении, `health: ok`; пересборка образов и `helmfile apply` не нужны — правило приезжает томом |
+| 2026-11-09 | Loki ruler: срабатывание и доставка до sink | временное правило `LogPathProbe` в том же ConfigMap, `/prometheus/api/v1/rules`, `/timeline` приёмника | загружено 09:36:04Z, `firing` 09:36:14Z, запись в `/timeline` 09:36:22Z (`status=firing`, метки `severity=ticket`, `probe=loki-path`); пробное правило удалено 09:36:24Z и выгружено из ruler к 09:37:44Z — путь «ruler → Alertmanager → `alert-sink`» доказан на реальных логах |
+
+Как проверить это повторно (временное правило по реальному трафику, без выдуманных строк
+и без правки кода) — раздел «Правила Loki ruler» в `docs/runbook.md`.
 
 ## Ещё не подтверждено живьём
 
@@ -127,14 +132,15 @@ rules` — `SUCCESS`. Чарты снова из локальных копий (
   при обновлении алерта или сборке мусора), поэтому закрытие письмом этой пробой не
   проверено — его покажет ближайший дрилл;
 - heartbeat пути уведомлений (правила `AlertSinkHeartbeatMissing`, `AlertSinkNeverReceived`);
-- правило Loki ruler `DemoApi5xxFromLogs`: загрузка правила, его оценка и обнаружение
-  Alertmanager подтверждены 2026-11-08 (см. таблицу выше), а `firing` и доставка в sink —
-  нет. Дрилл `errors` для этого не годится: `reset_peer` на toxiproxy рвёт соединение
-  **до** приложения, поэтому в логах demo-api остаются `http_request` со `status: 200` и
-  `request_aborted` (499), а строк с `status >= 500` не появляется. Нужен отдельный
-  способ: синтетическая строка `{"msg":"http_request","status":500}` в
-  `{namespace="demo", app="demo-api"}` через `/loki/api/v1/push` (проверяет ruler →
-  Alertmanager → sink, не трогая приложение) либо отдельная инъекция 5xx в demo-api;
+- срабатывание `DemoApi5xxFromLogs` именно на **реальном 5xx**. Путь «правило →
+  Alertmanager → sink» доказан 2026-11-09 пробным правилом на обычных логах, но ни одного
+  настоящего 5xx от `demo-api` в лабе не возникает: единственный источник 5xx — `503`
+  самопроверки `/ready` при дренаже, и он из выражения исключён (иначе правило горело бы
+  на каждом рестарте пода). Дрилл `errors` для этой проверки не годится: `reset_peer` на
+  toxiproxy рвёт соединение **до** приложения, и в логах остаются `status: 200` и
+  `request_aborted` (499) — ни то, ни другое под условие `status >= 500` не попадает.
+  Чтобы правило горело на настоящем 5xx, нужна инъекция 5xx в `demo-api` (отдельный
+  маршрут) и свой дрилл — это записано в «Идеи после v1.1»;
 - `stage.drop` Alloy: отсутствие `entry too far behind` после рестарта и рост счётчика
   отброшенных строк;
 - замер `retentionSize` TSDB (оставить 5 GB или понизить);
