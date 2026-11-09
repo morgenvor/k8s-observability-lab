@@ -239,3 +239,62 @@ tests:
       - eval_time: 15m
         alertname: AlloyDroppedLogs
         exp_alerts: []
+
+  # --- Alloy: фильтр старых строк -------------------------------------------
+  # Норма: счётчик не растёт (строки моложе порога доезжают до Loki).
+  - name: "Alloy не отбрасывает старые строки: AlloyOldLogsDropped молчит"
+    interval: 1m
+    input_series:
+      - series: 'up{job="alloy", namespace="monitoring", instance="10.0.0.1:12345"}'
+        values: '1x45'
+      - series: 'loki_process_dropped_lines_total{job="alloy", namespace="monitoring", reason="too_old", instance="10.0.0.1:12345"}'
+        values: '0x45'
+    alert_rule_test:
+      - eval_time: 40m
+        alertname: AlloyOldLogsDropped
+        exp_alerts: []
+
+  # Всплеск после пересоздания пода: counter прыгнул один раз и замер. rate за 15
+  # минут затухает, поэтому 30 минут условие не держится и алерт молчит — иначе он
+  # горел бы на каждом rollout DaemonSet.
+  - name: "всплеск после рестарта Alloy: AlloyOldLogsDropped молчит"
+    interval: 1m
+    input_series:
+      - series: 'up{job="alloy", namespace="monitoring", instance="10.0.0.1:12345"}'
+        values: '1x45'
+      - series: 'loki_process_dropped_lines_total{job="alloy", namespace="monitoring", reason="too_old", instance="10.0.0.1:12345"}'
+        values: '0x5 15000x40'
+    alert_rule_test:
+      - eval_time: 40m
+        alertname: AlloyOldLogsDropped
+        exp_alerts: []
+
+  # Устойчивая потеря: счётчик растёт непрерывно — значит старыми стали живые строки.
+  - name: "старые строки выбрасываются непрерывно: AlloyOldLogsDropped горит"
+    interval: 1m
+    input_series:
+      - series: 'up{job="alloy", namespace="monitoring", instance="10.0.0.1:12345"}'
+        values: '1x45'
+      - series: 'loki_process_dropped_lines_total{job="alloy", namespace="monitoring", reason="too_old", instance="10.0.0.1:12345"}'
+        values: '0+60x45'
+    alert_rule_test:
+      - eval_time: 40m
+        alertname: AlloyOldLogsDropped
+        exp_alerts:
+          - exp_labels:
+              # sum by (instance) сохраняет instance и выбрасывает остальные метки серии;
+              # job/namespace серии заменяются статическими метками правила.
+              instance: 10.0.0.1:12345
+              namespace: monitoring
+              service: alloy
+              severity: ticket
+            exp_annotations:
+              summary: "Alloy выбрасывает старые строки дольше 30 минут"
+              description: >-
+                Фильтр stage.drop отбрасывает строки старше 50 минут непрерывно:
+                после рестарта Alloy это проходит за несколько минут, поэтому долгий
+                рост означает, что старыми стали живые строки. Проверь часы на нодах
+                и в поде (сравни timestamp строки с time()), порог older_than в
+                helm/values/alloy.yaml и не отстало ли чтение логов. Цена ошибки —
+                потеря логов demo/monitoring.
+              runbook_url: "https://github.com/morgenvor/k8s-observability-lab/blob/main/docs/runbook.md#пайплайн-логов"

@@ -167,3 +167,35 @@ spec:
               отвечает ошибками или режет лимитами. Логи demo/monitoring теряются
               безвозвратно — это не задержка, а пропуск. Смотри reason и логи Alloy.
             runbook_url: "https://github.com/morgenvor/k8s-observability-lab/blob/main/docs/runbook.md#пайплайн-логов"
+        # Тот же класс потери, но с другой стороны фильтра: stage.drop в Alloy
+        # (helm/values/alloy.yaml) выбрасывает строки старше 50 минут. После
+        # пересоздания пода это норма — логи перечитываются с начала, — но счётчик
+        # вырастет и тогда, когда «старыми» станут живые строки: уехали часы на ноде,
+        # конфиг собрали с неверным порогом, контейнер долго не читался. Без правила
+        # такая потеря не видна никому: up == 1, Loki отвечает 200, AlloyDroppedLogs
+        # (это loki_write_dropped_entries_total) молчит — потерь на отправке нет.
+        # rate за 15 минут + for 30m: всплеск после рестарта затухает вместе с окном
+        # rate и до 30 минут не дотягивает, устойчивая потеря горит. Расчёт закреплён
+        # тестами rules/tests/pipeline.test.yaml, а не только этим комментарием.
+        - alert: AlloyOldLogsDropped
+          expr: |
+            sum by (instance) (
+              rate(loki_process_dropped_lines_total{
+                job="alloy", namespace="monitoring", reason="too_old"
+              }[15m])
+            ) > 0
+          for: 30m
+          labels:
+            severity: ticket
+            service: alloy
+            namespace: monitoring
+          annotations:
+            summary: "Alloy выбрасывает старые строки дольше 30 минут"
+            description: >-
+              Фильтр stage.drop отбрасывает строки старше 50 минут непрерывно:
+              после рестарта Alloy это проходит за несколько минут, поэтому долгий
+              рост означает, что старыми стали живые строки. Проверь часы на нодах
+              и в поде (сравни timestamp строки с time()), порог older_than в
+              helm/values/alloy.yaml и не отстало ли чтение логов. Цена ошибки —
+              потеря логов demo/monitoring.
+            runbook_url: "https://github.com/morgenvor/k8s-observability-lab/blob/main/docs/runbook.md#пайплайн-логов"
