@@ -91,6 +91,7 @@ flowchart TD
 ```bash
 ./scripts/bootstrap-tools.sh     # helm, helmfile, kubectl, kubeconform, promtool, helm-diff в .tools/
 ./scripts/check.sh               # офлайн-проверки: линтеры, тесты, рендер, promtool, скан секретов
+./scripts/check.sh --smoke       # то же плюс smoke фикстуры в docker (без кластера)
 export KUBECONFIG=/путь/к/своему/kubeconfig   # или .secrets/kubeconfig рядом с проектом
 ./scripts/build-image.sh         # образы приложений с тегом = короткий SHA
 ./scripts/import-image.sh        # импорт в containerd каждой ноды (registry в лабе нет)

@@ -1,19 +1,22 @@
 #!/usr/bin/env bash
 # Офлайн-ворота проекта: те же проверки, что в CI, без обращения к кластеру.
-# Использование: ./scripts/check.sh [--images] [--strict]
+# Использование: ./scripts/check.sh [--images] [--smoke] [--strict]
 #   --images  дополнительно собрать docker-образы приложений (медленнее)
+#   --smoke   плюс smoke фикстуры в docker: собрать образы и запустить их вне кластера
 #   --strict  провал при любом пропуске проверки (в CI: CHECK_STRICT=1)
 set -euo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
 WITH_IMAGES=0
+WITH_SMOKE=0
 STRICT="${CHECK_STRICT:-0}"
 for arg in "$@"; do
   case "${arg}" in
     --images) WITH_IMAGES=1 ;;
+    --smoke) WITH_SMOKE=1 ;;
     --strict) STRICT=1 ;;
     -h|--help)
-      sed -n '2,5p' "$0" | sed 's/^# \{0,1\}//'
+      sed -n '2,6p' "$0" | sed 's/^# \{0,1\}//'
       exit 0
       ;;
     *) die "неизвестный флаг: ${arg} (см. --help)" ;;
@@ -977,6 +980,18 @@ if [ "${WITH_IMAGES}" -eq 1 ]; then
       docker build -t "${name}:check" "${app_dir}"
     done
   fi
+fi
+
+# --- 7b. Smoke фикстуры без кластера (по флагу) ------------------------------
+# Закрывает разрыв «собралось ≠ запускается»: `npm test` идёт по исходникам, а
+# сломанный CMD, порт или переменная окружения видны только при запуске контейнера.
+# Скрипт тот же, что для ручного прогона, — CI и человек проверяют одно и то же.
+# Пропуска нет намеренно: флаг просят явно, поэтому отсутствие docker — провал с
+# подсказкой, а не зелёный результат с меньшим покрытием.
+if [ "${WITH_SMOKE}" -eq 1 ]; then
+  step "smoke фикстуры в docker"
+  need_cmd docker
+  bash "${PROJECT_ROOT}/scripts/smoke-local.sh"
 fi
 
 # --- 8. Секреты и лабораторные адреса в файлах, которые попадут в git --------

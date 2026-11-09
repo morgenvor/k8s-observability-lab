@@ -1,6 +1,7 @@
 # Офлайн-ворота проекта. Реальный прогон возможен только после push владельцем
 # (правило 3 AGENTS: публикация — действие владельца); локальный эквивалент —
 # ./scripts/check.sh и ./scripts/check.sh --images.
+# Smoke фикстуры (флаг --smoke ниже) — тот же scripts/smoke-local.sh, что и локально.
 name: ci
 
 on:
@@ -28,9 +29,10 @@ jobs:
       - name: Offline checks
         # Строгий режим: пропущенная проверка в CI не должна выглядеть как успех
         # (локально допустимы пропуски вроде отсутствующего shellcheck).
+        # --smoke запускает фикстуру в docker: «собралось» больше не равно «работает».
         env:
           CHECK_STRICT: "1"
-        run: ./scripts/check.sh
+        run: ./scripts/check.sh --smoke
 
   images:
     name: docker build
