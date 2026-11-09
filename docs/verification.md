@@ -163,6 +163,13 @@ rules` — `SUCCESS`. Чарты снова из локальных копий (
   при обновлении алерта или сборке мусора), поэтому закрытие письмом этой пробой не
   проверено — его покажет ближайший дрилл. У webhook-приёмника `resolved` проверен
   2026-11-09 на пробном правиле ruler (см. таблицу выше); у e-mail — нет;
+- сторожа правила ruler (`LokiRulerRulesMissing`, `LokiRulerEvaluationFailing`,
+  `rules/pipeline.yaml`): логика покрыта `promtool test rules` 2026-11-09, но на стенде
+  они не горели. Живая проверка — инъекция (убрать ключ `demo-api-5xx.yaml` из
+  ConfigMap `loki-rules` → `LokiRulerRulesMissing`; испортить выражение →
+  `LokiRulerEvaluationFailing`) с возвратом состояния по `kubectl apply -k
+  deploy/loki-rules`. Подтверждено живьём только существование опорных метрик
+  (`loki_prometheus_rule_evaluations_total`, `…_failures_total` — строка 2026-11-08);
 - heartbeat пути уведомлений (правила `AlertSinkHeartbeatMissing`, `AlertSinkNeverReceived`);
 - срабатывание `DemoApi5xxFromLogs` именно на **реальном 5xx**. Путь «правило →
   Alertmanager → sink» доказан 2026-11-09 пробным правилом на обычных логах, но ни одного

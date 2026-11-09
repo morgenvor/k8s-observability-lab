@@ -59,8 +59,14 @@ spec:
         # (demo-slo.alerts.availability и demo-slo.alerts.latency): если она не
         # загрузилась или падает, записанные slo:* остаются, а burn-rate алерты
         # молчат, и тишина снова выглядит как здоровый сервис. Остальные группы
-        # (demo-infra, demo-meta, demo-logs-pipeline) закрывает гейт деплоя
-        # scripts/deploy.sh — он ждёт число групп, выведенное из rules/*.yaml.
+        # (demo-infra, demo-meta, demo-logs-pipeline, demo-alerting-path) закрывает
+        # только гейт деплоя scripts/deploy.sh — он ждёт число групп, выведенное из
+        # rules/*.yaml. Рантайм-сторожа у них нет: если группа исчезнет после выкатки
+        # (удалён PrometheusRule, сломался ruleSelector), этого не заметит никто.
+        # Ограничение записано осознанно: сторож «все 10 групп» требует способа задать
+        # ожидаемое число без дрейфа, иначе константа в выражении устареет молча.
+        # Правило по логам в Loki сторожат свои правила — rules/pipeline.yaml
+        # (LokiRulerRulesMissing, LokiRulerEvaluationFailing).
         # Метка rule_group в Prometheus 3.15.1 — «<путь к файлу правил>;<имя группы>»
         # (проверено на стенде 2026-11-07), поэтому селектор — по хвосту регуляркой:
         # в пути есть UID PrometheusRule, он меняется при пересоздании объекта.

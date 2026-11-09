@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Ассерты цепочки Loki ruler: конфиг ruler -> том у StatefulSet -> ConfigMap -> правило.
+"""Ассерты цепочки Loki ruler: конфиг ruler -> том -> ConfigMap -> правило -> сторожа.
 
 Правило Loki живёт вне Prometheus: его читает ruler внутри пода Loki из каталога,
 смонтированного из ConfigMap. Ошибку здесь не видит ни kubeconform (это data
@@ -7,7 +7,13 @@ ConfigMap), ни promtool (LogQL он не разбирает), а цена — 
 путь тома, потерянный суффикс тенанта или выключенный ruler выглядят как «логов
 просто нет».
 
-Использование: loki_ruler.py <helmfile-render> <kustomize-render>
+Последний шаг — связка с сторожами: правила LokiRulerRulesMissing и
+LokiRulerEvaluationFailing (rules/pipeline.yaml) ищут группу ruler по метке
+rule_group. Если группу переименовать, а селектор не поправить, сторож либо горит
+постоянно (серии с новым именем нет), либо перестаёт видеть новую группу. Поэтому
+имя группы из файла правил обязано встречаться в выражении каждого сторожа.
+
+Использование: loki_ruler.py <helmfile-render> <kustomize-render> <rules/pipeline.yaml>
 """
 
 import sys
@@ -15,6 +21,7 @@ import sys
 import yaml
 
 from common import fail, finder, load_docs
+from common import find as find_doc
 
 ALERTMANAGER_URL = "http://monitoring-kube-prometheus-alertmanager.monitoring.svc:9093"
 # Локальное хранилище правил читает <directory>/<tenant>/<файл>, а тенант при
@@ -22,12 +29,18 @@ ALERTMANAGER_URL = "http://monitoring-kube-prometheus-alertmanager.monitoring.sv
 RULES_DIR = "/etc/loki/rules"
 TENANT_DIR = RULES_DIR + "/fake"
 RULE_KEY = "demo-api-5xx.yaml"
+# Сторожа правила ruler: обычные Prometheus-правила, которые смотрят на счётчики
+# движка правил Loki. Имена — из rules/pipeline.yaml.
+WATCHDOGS = ("LokiRulerRulesMissing", "LokiRulerEvaluationFailing")
 
 
 def main():
-    if len(sys.argv) != 3:
-        fail("использование: loki_ruler.py <helmfile-render> <kustomize-render>")
-    render_path, kustomize_path = sys.argv[1], sys.argv[2]
+    if len(sys.argv) != 4:
+        fail(
+            "использование: loki_ruler.py <helmfile-render> <kustomize-render>"
+            " <rules/pipeline.yaml>"
+        )
+    render_path, kustomize_path, pipeline_path = sys.argv[1], sys.argv[2], sys.argv[3]
     find = finder(load_docs(render_path), "рендере helmfile")
     find_kustomize = finder(load_docs(kustomize_path), "рендере kustomize")
 
@@ -132,7 +145,51 @@ def main():
         fail(f"DemoApi5xxFromLogs: service={labels.get('service')!r}, ожидался demo-api")
     if rule.get("for") != "2m":
         fail(f"DemoApi5xxFromLogs: for={rule.get('for')!r}, ожидалось 2m")
-    print("ассерты Loki ruler (конфиг, том, ConfigMap, правило): ok")
+
+    # 5) Сторожа правила: имена групп ruler обязаны быть в селекторах rule_group.
+    # Проверяются ВСЕ файлы ConfigMap, а не только RULE_KEY: новая группа правил без
+    # сторожа иначе появилась бы молча — ровно та дыра, ради которой шаг и заведён.
+    group_names = set()
+    for data_value in data.values():
+        rule_doc = yaml.safe_load(data_value) or {}
+        for group in rule_doc.get("groups") or []:
+            if isinstance(group, dict) and group.get("name"):
+                group_names.add(group["name"])
+    if not group_names:
+        fail("в ConfigMap loki-rules нет ни одной именованной группы ruler — сторожить нечего")
+
+    pipeline = find_doc(load_docs(pipeline_path), "PrometheusRule", where=pipeline_path)
+    watchdogs = {}
+    for group in (pipeline.get("spec") or {}).get("groups") or []:
+        for candidate in group.get("rules") or []:
+            if candidate.get("alert") in WATCHDOGS:
+                watchdogs[candidate["alert"]] = candidate
+    for missing in sorted(set(WATCHDOGS) - set(watchdogs)):
+        fail(
+            f"{pipeline_path}: нет сторожа {missing} — правило ruler снова никто не"
+            " сторожит (см. rules/pipeline.yaml, группа demo-logs-pipeline.loki)"
+        )
+    for alert_name, watchdog in sorted(watchdogs.items()):
+        expr = watchdog.get("expr") or ""
+        for group_name in sorted(group_names):
+            if group_name not in expr:
+                fail(
+                    f"{alert_name}: в expr нет имени группы ruler {group_name!r}."
+                    " Метка rule_group имеет вид «<файл>;<группа>»: при переименовании"
+                    " группы селектор перестанет совпадать, и сторож будет молчать или"
+                    " гореть постоянно. Поправь селектор в rules/pipeline.yaml вместе"
+                    " с именем группы в deploy/loki-rules/"
+                )
+        labels = watchdog.get("labels") or {}
+        if labels.get("severity") != "ticket":
+            fail(
+                f"{alert_name}: severity={labels.get('severity')!r}, ожидался ticket"
+                " — слепота логового уточнения не повод будить человека (page)"
+            )
+    print(
+        "ассерты Loki ruler (конфиг, том, ConfigMap, правило, сторожа"
+        f" {', '.join(sorted(watchdogs))}): ok"
+    )
 
 
 main()

@@ -17,10 +17,20 @@
 #
 # Severity по контракту проекта: page — только SLO burn-rate fast и SloRulesAbsent
 # (отказ сервиса), ticket — инфраструктурное событие для разбора, info — дефект
-# самого мониторинга. Логи не источник истины о доступности demo-api, поэтому отказ
-# Loki/Alloy — ticket, а не page: SLO продолжает считаться по метрикам.
+# самого мониторинга без потери сигнала (контекст). Дефект, из-за которого алерт
+# слепнет, — ticket, как у heartbeat пути уведомлений (rules/notifications.yaml).
+# Логи не источник истины о доступности demo-api, поэтому отказ Loki/Alloy — ticket,
+# а не page: SLO продолжает считаться по метрикам.
 # Маршрут один (AlertmanagerConfig без матчеров), так что severity здесь — метка
 # для человека, а не переключатель доставки.
+#
+# Дубли, которые остаются осознанно: при падении цели чарт параллельно поднимает
+# TargetDown (warning, for: 10m) и правила kube-state-metrics (KubePodNotReady,
+# KubeStatefulSetReplicasMismatch, KubeDaemonSet*), поэтому одно событие даёт две-три
+# записи в /timeline. Свои правила срабатывают раньше (5m) и различают «цель есть,
+# но не отвечает» и «цели нет вовсе» — TargetDown видит только up == 0. Отключить
+# TargetDown точечно нельзя (правило чарта общее для всех job), а цена дубля —
+# лишняя запись, не лишний page: warning и ticket идут в один sink.
 #
 # Чего здесь сознательно нет:
 #   * отдельного AlloyNotSending — «Alloy не отправляет» и «Loki не принимает» с точки
@@ -98,6 +108,66 @@ spec:
               loki.monitoring.svc:3100 и фильтр __meta_kubernetes_pod_node_name;
               если всё цело — возможно, в demo и monitoring просто тихо.
             runbook_url: "https://github.com/morgenvor/k8s-observability-lab/blob/main/docs/runbook.md#пайплайн-логов"
+
+        # Сторож самого правила ruler. У правил Prometheus такой есть (rules/meta.yaml),
+        # у единственного логового правила его не было: выпавший из ConfigMap, не
+        # смонтированный в /etc/loki/rules/fake, невалидный или выключенный вместе с
+        # ruler файл оставляет под Loki живым, up == 1 и логи идущими — и правило
+        # DemoApi5xxFromLogs просто молчит. Отличить «правило не загружено» от
+        # «5xx нет» было нечем, и это ровно тот класс поломки, против которого заведены
+        # ворота проекта.
+        #
+        # Опорная метрика — счётчик движка правил Prometheus с префиксом loki_;
+        # существование и метка rule_group подтверждены живым замером 2026-11-08
+        # (docs/verification.md). Формат rule_group — «<файл>;<имя группы>», причём в
+        # имени файла есть путь и UID, поэтому селектор по хвосту регуляркой; группа
+        # «demo-api-logs» берётся из deploy/loki-rules/demo-api-5xx.yaml, и совпадение
+        # имён проверяет scripts/checks/loki_ruler.py (иначе переименование группы
+        # тихо отключит сторожа).
+        - alert: LokiRulerRulesMissing
+          expr: sum(absent(loki_prometheus_rule_evaluations_total{rule_group=~"(.*;)?demo-api-logs"})) > 0
+          for: 10m
+          labels:
+            severity: ticket
+            service: loki
+            namespace: monitoring
+          annotations:
+            summary: "Loki ruler: правило по логам не вычисляется"
+            description: >-
+              Серии loki_prometheus_rule_evaluations_total для группы demo-api-logs нет
+              дольше 10 минут: файл пропал из ConfigMap loki-rules, не смонтирован в
+              /etc/loki/rules/fake, ruler выключен или файл не разбирается. Правило
+              DemoApi5xxFromLogs при этом молчит, и отличить это от «5xx нет» нечем.
+              Проверь ConfigMap loki-rules, /prometheus/api/v1/rules на порту 3100 и
+              лог пода Loki.
+            runbook_url: "https://github.com/morgenvor/k8s-observability-lab/blob/main/docs/runbook.md#сторож-самого-правила-ruler"
+        # Второй случай — правило загружено, но выражение падает на вычислении (например,
+        # после смены формата поля в логах или при ошибке запроса к хранилищу). Тогда
+        # счётчик вычислений растёт, а счётчик ошибок — тоже; первый сторож молчит.
+        # Окно 15m + for 5m: одиночный сбой вычисления уже дефект (цикл правила не
+        # посчитан), но алерт сам снимается через ~20 минут после последнего сбоя и не
+        # висит час. sum() убирает метку rule_group из алерта: в ней путь файла и UID
+        # PrometheusRule-подобного объекта, то есть мусор для человека и лишняя
+        # кардинальность в /timeline. ticket, а не page: сам отказ сервиса виден в
+        # SLO, здесь — слепота логового уточнения.
+        - alert: LokiRulerEvaluationFailing
+          expr: sum(increase(loki_prometheus_rule_evaluation_failures_total{rule_group=~"(.*;)?demo-api-logs"}[15m])) > 0
+          for: 5m
+          labels:
+            severity: ticket
+            service: loki
+            namespace: monitoring
+          annotations:
+            summary: "Loki ruler: вычисление правила по логам падает"
+            description: >-
+              Счётчик loki_prometheus_rule_evaluation_failures_total для группы
+              demo-api-logs растёт: правило загружено, но выражение не вычисляется.
+              Типичные причины — сменился формат поля (| json | status >= 500), ошибка
+              запроса к хранилищу или нехватка ресурсов пода. Пока это так,
+              DemoApi5xxFromLogs не горит ни на настоящих 5xx, ни на отсутствии логов.
+              Смотри лог пода Loki (rule evaluation failed), /prometheus/api/v1/rules
+              на порту 3100 и серии в Loki.
+            runbook_url: "https://github.com/morgenvor/k8s-observability-lab/blob/main/docs/runbook.md#сторож-самого-правила-ruler"
 
     - name: demo-logs-pipeline.alloy
       rules:

@@ -945,9 +945,10 @@ kube-prometheus-stack.
 
 ### Пайплайн логов
 
-Восемь правил `rules/pipeline.yaml`: `LokiDown`, `LokiTargetMissing`,
+Десять правил `rules/pipeline.yaml`: `LokiDown`, `LokiTargetMissing`,
 `LokiNotIngesting`, `AlloyDown`, `AlloyTargetMissing`, `AlloyCoverageIncomplete`,
-`AlloyDroppedLogs`, `AlloyOldLogsDropped`. Ключевое различие: `*Down` — цель есть, но
+`AlloyDroppedLogs`, `AlloyOldLogsDropped`, `LokiRulerRulesMissing`,
+`LokiRulerEvaluationFailing`. Ключевое различие: `*Down` — цель есть, но
 `/metrics` не отвечает (`up == 0`); `*TargetMissing` — цели нет вовсе (`absent(up)`),
 то есть удалён объект/`ServiceMonitor` или у Service нет эндпоинтов.
 
@@ -1004,7 +1005,38 @@ kube-prometheus-stack.
   поэтому `ticket`.
 - Правило не горит → сначала проверь, что ruler жив: `/prometheus/api/v1/rules` на
   порту 3100 (раздел «Правила Loki ruler»), затем что логи вообще доезжают
-  (`LokiNotIngesting`, `AlloyDroppedLogs` из «Пайплайн логов»).
+  (`LokiNotIngesting`, `AlloyDroppedLogs` из «Пайплайн логов»). «Правило не
+  загружено» и «правило падает на вычислении» с 2026-11-09 ловят свои сторожа —
+  подраздел «Сторож самого правила ruler» ниже.
+
+### Сторож самого правила ruler
+
+Правило `DemoApi5xxFromLogs` живёт вне Prometheus, и до 2026-11-09 его загрузку никто
+не сторожил: файл, выпавший из ConfigMap, невалидный YAML или выключенный вместе с
+ruler компонент оставляли ноль алертов — при живом поде, `up == 1` и идущих логах.
+Два правила в `rules/pipeline.yaml` смотрят на счётчики движка правил внутри Loki
+(те же метрики, что у Prometheus, с префиксом `loki_`); у обоих
+`severity: ticket`:
+
+- `LokiRulerRulesMissing` (`for: 10m`) — серии
+  `loki_prometheus_rule_evaluations_total` для группы `demo-api-logs` нет дольше
+  10 минут. Значит, правило не загружено или не вычисляется вообще. Проверь
+  ConfigMap `loki-rules` (ключ `demo-api-5xx.yaml`), каталог `/etc/loki/rules/fake`
+  в поде, `/prometheus/api/v1/rules` на порту 3100 и лог пода Loki на `error`.
+- `LokiRulerEvaluationFailing` (`for: 5m`, окно `15m`) — счётчик
+  `loki_prometheus_rule_evaluation_failures_total` растёт: правило есть, но выражение
+  падает. Одиночный сбой уже дефект (цикл правила не посчитан), поэтому алерт снимается
+  сам через ~20 минут после последнего сбоя, а не висит час. Смотри лог пода на
+  `rule evaluation failed`, `/prometheus/api/v1/rules` и серии в Loki.
+
+Селектор у обоих — по хвосту метки `rule_group`: её значение имеет вид
+`<файл>;<имя группы>`, а в имени файла есть путь с UID, который меняется при
+пересоздании. Совпадение имени группы с `deploy/loki-rules/*.yaml` проверяют ворота
+(`scripts/checks/loki_ruler.py`): переименование группы без правки селектора валит
+`./scripts/check.sh`, а не оставляет сторожа смотреть в пустоту.
+
+Само правило и его путь проверяются отдельно: `/prometheus/api/v1/rules` на порту
+3100 и временное правило по реальному трафику — раздел «Правила Loki ruler».
 
 ### Путь уведомлений
 

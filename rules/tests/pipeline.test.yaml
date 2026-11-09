@@ -298,3 +298,86 @@ tests:
                 helm/values/alloy.yaml и не отстало ли чтение логов. Цена ошибки —
                 потеря логов demo/monitoring.
               runbook_url: "https://github.com/morgenvor/k8s-observability-lab/blob/main/docs/runbook.md#пайплайн-логов"
+
+  # --- Сторожа самого правила Loki ruler ------------------------------------
+  # Правило DemoApi5xxFromLogs живёт вне Prometheus, и до 2026-11-09 его загрузку
+  # никто не сторожил: выпавший файл выглядел как «5xx нет». Сторожа — обычные
+  # правила Prometheus, опорные метрики — счётчики движка правил Loki с меткой
+  # rule_group формата «<файл>;<группа>».
+  - name: "правило ruler вычисляется: оба сторожа молчат"
+    interval: 1m
+    input_series:
+      - series: 'loki_prometheus_rule_evaluations_total{rule_group="monitoring/demo-api-5xx.yaml;demo-api-logs"}'
+        values: '0+1x40'
+      - series: 'loki_prometheus_rule_evaluation_failures_total{rule_group="monitoring/demo-api-5xx.yaml;demo-api-logs"}'
+        values: '0x40'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: LokiRulerRulesMissing
+        exp_alerts: []
+      - eval_time: 20m
+        alertname: LokiRulerEvaluationFailing
+        exp_alerts: []
+
+  # Счётчика вычислений нет вовсе: файл выпал из ConfigMap, не смонтирован в каталог
+  # тенанта, ruler выключен или YAML не разбирается. Серия up при этом живая — под
+  # Loki работает, логи идут, и без этого правила тишина неотличима от нормы.
+  - name: "правила ruler нет в метриках: LokiRulerRulesMissing горит"
+    interval: 1m
+    input_series:
+      - series: 'up{job="monitoring/loki", namespace="monitoring"}'
+        values: '1x40'
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: LokiRulerRulesMissing
+        exp_alerts:
+          - exp_labels:
+              namespace: monitoring
+              service: loki
+              severity: ticket
+            exp_annotations:
+              summary: "Loki ruler: правило по логам не вычисляется"
+              description: >-
+                Серии loki_prometheus_rule_evaluations_total для группы demo-api-logs нет
+                дольше 10 минут: файл пропал из ConfigMap loki-rules, не смонтирован в
+                /etc/loki/rules/fake, ruler выключен или файл не разбирается. Правило
+                DemoApi5xxFromLogs при этом молчит, и отличить это от «5xx нет» нечем.
+                Проверь ConfigMap loki-rules, /prometheus/api/v1/rules на порту 3100 и
+                лог пода Loki.
+              runbook_url: "https://github.com/morgenvor/k8s-observability-lab/blob/main/docs/runbook.md#сторож-самого-правила-ruler"
+      - eval_time: 20m
+        alertname: LokiRulerEvaluationFailing
+        exp_alerts: []
+
+  # Правило загружено и вычисления идут, но счётчик ошибок растёт: выражение падает
+  # (сменился формат поля, ошибка запроса к хранилищу). Первый сторож в этом случае
+  # молчит — и без второго сбой вычисления был бы невидим.
+  - name: "вычисление правила ruler падает: LokiRulerEvaluationFailing горит"
+    interval: 1m
+    input_series:
+      - series: 'loki_prometheus_rule_evaluations_total{rule_group="monitoring/demo-api-5xx.yaml;demo-api-logs"}'
+        values: '0+1x40'
+      - series: 'loki_prometheus_rule_evaluation_failures_total{rule_group="monitoring/demo-api-5xx.yaml;demo-api-logs"}'
+        values: '0x15 1x25'
+    alert_rule_test:
+      - eval_time: 25m
+        alertname: LokiRulerEvaluationFailing
+        exp_alerts:
+          - exp_labels:
+              namespace: monitoring
+              service: loki
+              severity: ticket
+            exp_annotations:
+              summary: "Loki ruler: вычисление правила по логам падает"
+              description: >-
+                Счётчик loki_prometheus_rule_evaluation_failures_total для группы
+                demo-api-logs растёт: правило загружено, но выражение не вычисляется.
+                Типичные причины — сменился формат поля (| json | status >= 500), ошибка
+                запроса к хранилищу или нехватка ресурсов пода. Пока это так,
+                DemoApi5xxFromLogs не горит ни на настоящих 5xx, ни на отсутствии логов.
+                Смотри лог пода Loki (rule evaluation failed), /prometheus/api/v1/rules
+                на порту 3100 и серии в Loki.
+              runbook_url: "https://github.com/morgenvor/k8s-observability-lab/blob/main/docs/runbook.md#сторож-самого-правила-ruler"
+      - eval_time: 25m
+        alertname: LokiRulerRulesMissing
+        exp_alerts: []

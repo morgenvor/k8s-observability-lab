@@ -217,10 +217,13 @@ python3 "${PROJECT_ROOT}/scripts/checks/route_tree.py" \
 
 # --- 4d. Loki ruler: правило по логам в рендере -------------------------------
 # Правило Loki читает ruler из ConfigMap: ни kubeconform, ни promtool эту цепочку не
-# видят, а неверный путь тома выглядит как «логов просто нет» (loki_ruler.py).
+# видят, а неверный путь тома выглядит как «логов просто нет». Последний аргумент —
+# свои правила-сторожа: имя группы ruler обязано быть в их селекторах rule_group,
+# иначе переименование группы тихо отключает сторожа (loki_ruler.py).
 step "Loki ruler в рендере"
 python3 "${PROJECT_ROOT}/scripts/checks/loki_ruler.py" \
-  "${PROJECT_ROOT}/.tmp/rendered/helmfile.yaml" "${PROJECT_ROOT}/.tmp/rendered/kustomize.yaml"
+  "${PROJECT_ROOT}/.tmp/rendered/helmfile.yaml" "${PROJECT_ROOT}/.tmp/rendered/kustomize.yaml" \
+  "${PROJECT_ROOT}/rules/pipeline.yaml"
 # Оверлей деплоя (scripts/lib.sh) — второй список ресурсов kustomize, и он тоже обязан
 # содержать deploy/loki-rules: иначе deploy.sh применит StatefulSet с томом на
 # несуществующий ConfigMap, под Loki не встанет, и встанет вся запись логов.
