@@ -55,8 +55,12 @@ spec:
               При 14,4x за час уходит ~20 % трёхдневного бюджета. Смотри долю
               не-ok в demo-load и состояние toxiproxy: чаще всего это сетевой
               сбой или недоступный demo-api.
-            runbook_url: "https://github.com/morgenvor/k8s-observability-lab/blob/main/docs/runbook.md#slo-доступности-burn-rate-fast-medium-и-slow"
+            runbook_url: "https://github.com/morgenvor/k8s-observability-lab/blob/main/docs/runbook.md#slodemoavailabilityburnfast"
             dashboard_url: "http://grafana.lab.internal/d/demo-slo"
+            # Панель 5 дашборда demo-red — логи namespace demo из Loki. Ссылка без
+            # времени: окно подставляет шаблон письма (time/time.window), потому что
+            # арифметики в шаблонах Alertmanager нет, а startsAt знает только он.
+            logs_url: "http://grafana.lab.internal/d/demo-red?viewPanel=5"
         - alert: SloDemoAvailabilityBurnMedium
           expr: |
             slo:demo_availability:burn_rate_30m > 6
@@ -113,8 +117,9 @@ spec:
               {{ $value | printf "%.1f" }}x (порог 14,4x в окнах 5m и 30m) при
               бюджете 5 %. Проверь латентность клиента demo-load и toxiproxy:
               дрилл latency добавляет задержку на прокси, а не в приложении.
-            runbook_url: "https://github.com/morgenvor/k8s-observability-lab/blob/main/docs/runbook.md#slo-латентности-burn-rate-fast-medium-и-slow"
+            runbook_url: "https://github.com/morgenvor/k8s-observability-lab/blob/main/docs/runbook.md#slodemolatencyburnfast"
             dashboard_url: "http://grafana.lab.internal/d/demo-slo"
+            logs_url: "http://grafana.lab.internal/d/demo-red?viewPanel=5"
         - alert: SloDemoLatencyBurnMedium
           expr: |
             slo:demo_latency:burn_rate_30m > 6

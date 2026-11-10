@@ -27,7 +27,7 @@ tests:
                 (нет метки release=monitoring?), группа падает на вычислении или
                 оператор ещё не перезагрузил правило. Пока это так, burn-rate
                 алерты по SLO молчат — тишина не означает «всё хорошо».
-              runbook_url: "https://github.com/morgenvor/k8s-observability-lab/blob/main/docs/runbook.md#сторожа-правил-и-slo-meta"
+              runbook_url: "https://github.com/morgenvor/k8s-observability-lab/blob/main/docs/runbook.md#slorulesabsent"
 
   # SloDemoNoTraffic смотрит не на slo:*, а на сырые метрики нагрузки, поэтому
   # его кейсы моделируются теми же метриками, что и в demo-slo.yaml: up и
@@ -149,7 +149,7 @@ tests:
                 выкинул оператор. Записанные серии slo:* при этом живы, поэтому
                 SloRulesAbsent молчит, а страниц по бюджету ошибок нет вовсе — тишина
                 не означает «всё хорошо».
-              runbook_url: "https://github.com/morgenvor/k8s-observability-lab/blob/main/docs/runbook.md#сторожа-правил-и-slo-meta"
+              runbook_url: "https://github.com/morgenvor/k8s-observability-lab/blob/main/docs/runbook.md#sloalertrulesabsent"
 
   # --- Троттлинг генератора нагрузки ----------------------------------------
   # Отношение throttled/periods считается по cgroup-метрикам контейнера: в тесте

@@ -665,6 +665,39 @@ curl -s http://127.0.0.1:8080/timeline | jq '[.[] | select(.truncated_alerts > 0
 Catch-all — страховка от нового или отсутствующего `severity`: без него такой алерт
 ушёл бы в `null`-получатель и исчез молча.
 
+#### Что в письме
+
+Письмо — `multipart/alternative`: наша plain-часть (`text`) и наша HTML-часть (`html`),
+обе собираются одним шаблоном на каждый алерт группы. Для одного алерта письмо содержит:
+
+| Поле | Откуда | Зачем |
+|---|---|---|
+| `FIRING`/`RESOLVED`, severity, `alertname`, сервис | метки алерта | что произошло, без открытия UI |
+| `summary` и `description` | аннотации правила | в `description` — оценка масштаба (`$value` burn rate) и куда смотреть |
+| «Ранбук: пошаговая диагностика» | `runbook_url` | свой раздел ранбука у каждого page-алерта |
+| «Дашборд» | `dashboard_url` | `demo-slo` / `demo-red` |
+| «Логи: окно инцидента (±15 мин)» | `logs_url` + `time`/`time.window` | панель логов `demo-red` вокруг срабатывания |
+| «Логи: что сейчас» | `logs_url` + `from`/`to=now` | то же от срабатывания до момента клика |
+| Source / Alertmanager | `GeneratorURL` / `ExternalURL` | выражение в Prometheus и сам алерт в UI |
+| «Сработал: … MSK (… UTC)» | `startsAt` | время срабатывания (`for` уже истёк) |
+
+Почему окно именно `time` + `time.window`: арифметики в шаблонах Alertmanager 0.34.1 нет
+(`toDuration` не определена), а Grafana трактует `time`/`time.window` как окно
+`time ± window/2`. Вторая ссылка (`from`/`to=now`) не требует вычислений вообще.
+
+Оговорки, которые важно знать:
+
+- **Grafana просит логин.** Ссылки ведут на `/login?redirectTo=…` — после входа браузер
+  вернёт на нужный вид. Prometheus и Alertmanager открыты без аутентификации.
+- **`startsAt` — не начало инцидента**, а момент, когда истёк `for` (2m). Онсет раньше:
+  окно burn rate (5m у доступности, 30m у латентности) должно было перерасти порог. Поэтому
+  окно ±15 минут, а не «минус for».
+- **Ссылок на логи может не быть:** они появляются только у правил с аннотацией
+  `logs_url` (сейчас — два page-правила SLO). У чартовых `critical` остаются ранбук
+  апстрима, Source и Alertmanager — демо-панель для них бесполезна.
+- **Хост Grafana** в git — плейсхолдер `grafana.lab.internal`; `GRAFANA_BASE_URL` при
+  деплое заменяет его и в письме, и в аннотациях правил (см. ниже).
+
 **Что нужно от окружения (в git этого нет):**
 
 1. SMTP-провайдер с **паролем приложения** (Яндекс: «Пароли приложений» в ID; Mail.ru:
@@ -688,6 +721,7 @@ export ALERT_EMAIL_TO='alerts@<ваш-домен>'          # ящик чело�
 export ALERT_EMAIL_FROM='alertmanager@<ваш-домен>'  # обычно = логин SMTP
 export SMTP_SMARTHOST='smtp.yandex.ru:465'
 export SMTP_USERNAME='alertmanager@<ваш-домен>'
+export GRAFANA_BASE_URL='https://grafana.<ваш-домен>'   # необязательно: хост ссылок в письме
 ./scripts/deploy.sh
 ```
 
@@ -713,6 +747,14 @@ Secret файлом, а подставляет значение в `alertmanager
 плейсхолдеры `example.invalid`. `SMTP_SMARTHOST` валидируется как `host:port`.
 Порт 465 (implicit TLS) и 587 (STARTTLS) поддержаны клиентом Alertmanager; живьём
 проверен только 587 — для 465 нет подтверждения на этом стенде.
+
+**`GRAFANA_BASE_URL`** (необязательная) — хост Grafana для ссылок в письме и в
+аннотациях правил. Формат `http(s)://host[:port]`, без пути; в git везде плейсхолдер
+`grafana.lab.internal`. Подстановка идёт по всему рендеру, а не только по шаблону письма:
+иначе письмо вело бы на новый хост, а `dashboard_url`/`logs_url` в правилах — на
+лабораторный. Проверяется офлайн: `scripts/check.sh` рендерит вариант с
+`GRAFANA_BASE_URL=http://grafana.example.com` и требует, чтобы плейсхолдера в рендере не
+осталось.
 
 **Проверка:**
 
@@ -843,19 +885,85 @@ kubectl -n demo get endpointslices -l kubernetes.io/service-name=demo-api \
 
 **Порядок разбора** (сначала факт, потом причина — иначе легко чинить не то):
 
-1. **Открыть алерт в Prometheus UI** (`prometheus.lab.internal`) → вкладка Alerts: с какого
-   времени `activeAt`, какие метки, какой `for`. Если алерт `inactive` — это был resolved
-   или устаревшее уведомление.
-2. **Дашборд** `demo-slo` — какой SLO и какое окно горит (fast 14,4x — отказ идёт прямо
+1. **Письмо** — по ссылке `runbook_url` открыть раздел этого алерта: у каждого page-алерта
+   он свой, с шагами. Ссылки «Логи: окно инцидента» и «Логи: что сейчас» открывают панель
+   логов `demo-red` с готовым диапазоном; ссылка на дашборд ведёт на `demo-slo`.
+2. **Алерт в Prometheus** (`prometheus.lab.internal`) → вкладка Alerts: с какого времени
+   `activeAt`, какие метки, какой `for`. Если алерт `inactive` — это был resolved или
+   устаревшее уведомление.
+3. **Дашборд** `demo-slo` — какой SLO и какое окно горит (fast 14,4x — отказ идёт прямо
    сейчас; medium 6x / slow 1x — деградация накопленная). `demo-red` — что видят клиенты:
    RPS, доля ошибок, p95.
-3. **Логи** в Grafana (datasource `loki`, запрос `{namespace="demo", app="demo-api"} | json`,
-   фильтр по `status >= 500` или по `request_id` из уведомления) — отвечают на «почему», но
+4. **Логи** в Grafana (datasource `loki`, запрос `{namespace="demo", app="demo-api"} | json`,
+   фильтр по `status >= 500` или по `request_id` из строки лога) — отвечают на «почему», но
    не на «насколько плохо»: счётчики потерь сети до клиента видны только в метриках.
-4. **Не инъекция ли это** — дрилл или чужая правка стенда: `kubectl -n demo get pods`,
+5. **Не инъекция ли это** — дрилл или чужая правка стенда: `kubectl -n demo get pods`,
    токсины toxiproxy (`GET /proxies`), `kubectl -n demo get deploy demo-api -o yaml`.
-5. **Действие** — по классу из таблицы `severity` выше и по ссылке `runbook_url` в самом
-   уведомлении (если она заполнена).
+6. **Действие** — по классу из таблицы `severity` выше и по шагам своего раздела ранбука.
+
+### Общие команды page-разбора
+
+Page-алерт требует реакции в минутах, поэтому в разделах page-алертов ниже — только
+специфика, а повторяющаяся часть собрана здесь. Prometheus и Alertmanager опубликованы без
+аутентификации, Grafana — с логином: ссылка из письма открывает `/login` (один раз на
+браузер). Port-forward для API не нужен, имён из `/etc/hosts` достаточно.
+
+```bash
+# что горит прямо сейчас; activeAt — когда истёк for, а не начало инцидента
+curl -s --get --data-urlencode 'query=ALERTS{alertstate="firing"}' \
+  http://prometheus.lab.internal/api/v1/query \
+  | jq -r '.data.result[] | "\(.metric.alertname)\t\(.metric.severity)\t\(.value[1])"'
+
+# здоровье групп правил: lastError и наличие групп
+curl -s http://prometheus.lab.internal/api/v1/rules \
+  | jq -r '.data.groups[] | select(.name|startswith("demo-")) | "\(.name)\t\(.lastError // "-")"'
+
+# что уже доставлено человеку и в журнал
+curl -s http://alertmanager.lab.internal/api/v2/alerts \
+  | jq -r '.[] | "\(.labels.alertname)\t\(.status)\t\(.startsAt)"'
+```
+
+Дашборды: `demo-slo` (бюджет, burn rate по окнам) и `demo-red` (RPS, ошибки, p95 и панель
+«Логи demo (Loki)» — её же открывают ссылки из письма).
+
+```bash
+# поды и путь: не инъекция ли это
+kubectl -n demo get pods -o wide
+kubectl -n demo port-forward svc/toxiproxy 8474:8474 &
+curl -s http://127.0.0.1:8474/proxies \
+  | jq 'to_entries[] | {proxy: .key, enabled: .value.enabled, toxics: [.value.toxics[].name]}'
+```
+
+Перед действием проверь, что это не дрилл: свежий каталог `evidence/`, время в его
+`.console.log`, `git log --oneline -3`.
+
+### SloDemoAvailabilityBurnFast
+
+Page по бюджету доступности: burn 14,4x одновременно в окнах 5m и 1h, `for: 2m`
+(`rules/demo-slo-alerts.yaml`, группа `demo-slo.alerts.availability`). К моменту письма
+бюджет уже тратится — восстановление важнее поиска причины.
+
+1. Общие команды (выше): `ALERTS`, `/api/v1/rules`, дашборды `demo-slo` и `demo-red`.
+2. Раздели сеть и приложение по клиентским исходам:
+
+   ```bash
+   curl -s --get --data-urlencode \
+     'query=sum by (outcome) (rate(load_requests_total{job="demo-load"}[5m]))' \
+     http://prometheus.lab.internal/api/v1/query \
+     | jq -r '.data.result[] | "\(.metric.outcome)\t\(.value[1])"'
+   ```
+
+   Растёт `timeout`, а `error` нет → проблема на пути `demo-load → toxiproxy → demo-api`
+   (токсин, сеть или под), а не в коде приложения.
+3. toxiproxy: включён ли токсин (`GET /proxies` из общего блока), сколько реплик
+   `demo-api` в `Ready` (`kubectl -n demo get pods -o wide`).
+4. Если путь чист — `kubectl -n demo logs deploy/demo-api --tail=100` и
+   `kubectl -n demo describe pod`: падение, OOM, сломанная проба.
+5. Действие: снять токсин, вернуть реплики, перезапустить под. Причину разбирай после —
+   бюджет уже потрачен.
+
+Если `timeout` растут при здоровом `demo-api` и серверном p95 в единицах миллисекунд,
+виноват генератор: раздел «Троттлинг генератора нагрузки».
 
 ### SLO доступности: burn rate fast, medium и slow
 
@@ -873,26 +981,39 @@ kubectl -n demo get endpointslices -l kubernetes.io/service-name=demo-api \
 | Medium | burn 6x в 30m и 6h, `for: 15m` | устойчивая деградация: за 6 часов уходит ~50 % бюджета | ticket |
 | Slow | burn 1x за 3d, `for: 1h` | бюджет сгорает к концу окна SLO без резкого всплеска | ticket |
 
-Что смотреть и в каком порядке:
+Реакция на Fast — в разделе «SloDemoAvailabilityBurnFast» (та же ссылка в письме):
+сначала восстанови путь, потом разбирайся. Medium и Slow — тикет, разбор плановый:
 
 1. `demo-slo` — какой бюджет и какое окно горит: остаток бюджета, `burn_rate_*` по
    окнам, текущий SLI за 3 дня.
 2. `demo-red` — что видят клиенты: RPS, доля ошибок (`клиент/сервер`), p95. Панель
    «Логи (Loki)» того же дашборда отвечает на «почему» (статусы, `request_id`), но не
    на «насколько плохо»: доля потерь на пути до клиента есть только в метриках.
-3. `kubectl -n demo get pods -o wide` и `kubectl -n demo port-forward svc/toxiproxy
-   8474:8474` → `GET /proxies`: toxiproxy включён/задержан, под `demo-api` не
-   `Ready`, реплик меньше двух. Отдельно проверь, не идёт ли дрилл (`evidence/`).
-4. Если инъекции нет — смотри `kubectl -n demo logs deploy/demo-api --tail=100` и
-   `kubectl -n demo describe pod`: падение подов, OOM, сломанная проба. Если под
-   `demo-api` здоров, а в `load_requests_total` растут `timeout` при нулевых `error`,
-   виноват генератор — порядок проверки в шаге 5 раздела «SLO латентности».
+3. Записать в тикет, какой маршрут/клиент съедает бюджет (метка `route` в
+   `http_requests_total`), и не идёт ли дрейф от инъекции (`evidence/`).
 
-Fast требует реакции в минутах: сначала восстанови путь (снять токсин, вернуть
-реплики), потом разбирайся в причине — бюджет уже тратится. Medium и Slow — тикет:
-разбор плановый, но с записью, какой маршрут/клиент съедает бюджет (у `demo-api`
-маршруты заданы меткой `route` в `http_requests_total`). Сценарии инъекций —
-`docs/drills.md` (`errors`, `readiness`).
+Сценарии инъекций — `docs/drills.md` (`errors`, `readiness`).
+
+### SloDemoLatencyBurnFast
+
+Page по бюджету латентности: 14,4x в окнах 5m и 30m, `for: 2m`
+(`rules/demo-slo-alerts.yaml`, группа `demo-slo.alerts.latency`). Длинное окно — 30m, а не
+1h: при пороге 14,4x и бюджете 5 % условие с окном 1h выполнилось бы только на 43-й
+минуте полного замедления (разбор — в комментарии к правилам).
+
+1. Общие команды (выше): `ALERTS`, дашборды `demo-slo` и `demo-red`.
+2. Первым делом раздели клиент и сервер: `p95` на `demo-red` по
+   `load_request_duration_seconds` (клиент, включает прокси) и по
+   `http_request_duration_seconds` (сервер). Медленно только на клиенте → дело в пути или
+   в генераторе, а не в коде `demo-api`.
+3. toxiproxy: включён ли токсин `latency` (`GET /proxies` из общего блока) — дрилл
+   `latency` добавляет задержку на прокси.
+4. Если путь чист и медленно **только на клиенте** — проверь троттлинг генератора
+   (раздел «Троттлинг генератора нагрузки»): SLI считаются по метрикам `demo-load`,
+   поэтому его заморозка попадает в бюджет. Лечится лимитом CPU в
+   `deploy/base/demo-load.yaml`.
+5. Действие: снять задержку, перезапустить под, поднять лимит. Оптимизация кода — уже
+   после, бюджет к моменту письма потрачен.
 
 ### SLO латентности: burn rate fast, medium и slow
 
@@ -912,26 +1033,19 @@ Fast требует реакции в минутах: сначала восст�
 окном 1h выполняется только на 43-й минуте полного замедления. Разбор — в комментарии
 к `rules/demo-slo-alerts.yaml`.
 
-Порядок разбора тот же, что у доступности, с поправкой на предмет:
+Реакция на Fast — в разделе «SloDemoLatencyBurnFast» (та же ссылка в письме).
+Для Medium и Slow — плановый разбор по накопленным окнам:
 
 1. `demo-slo` — доля запросов ≤ 300 мс и burn rate по окнам `5m`/`30m`/`6h`/`3d`.
 2. `demo-red` — p95 по обеим гистограммам: если медленно только на клиенте, дело в
-   пути (`toxiproxy`), а не в приложении.
-3. `GET /proxies` у toxiproxy — включён ли токсин `latency` (дрилл `latency` добавляет
-   задержку на прокси, а не в коде).
-4. Если путь чист — ищи медленные маршруты: `histogram_quantile(0.95,
+   пути (`toxiproxy`) или в генераторе, а не в приложении.
+3. Если путь чист — ищи медленные маршруты: `histogram_quantile(0.95,
    sum by (route) (rate(http_request_duration_seconds_bucket[5m])))` и логи с большим
    `duration_ms`.
-5. Если медленно **только на клиенте** (серверный p95 единицы миллисекунд), виноват
-   прибор, а не сервис: SLI считаются по метрикам `demo-load`, поэтому его собственная
-   заморозка попадает в бюджет. Признак — длительности в логах генератора квантуются
-   по ~100 мс (498/703/897/1001/1600 мс): это период CFS, в котором контейнер выбрал
-   квоту. Смотри троттлинг пода `demo-load`:
-   `rate(container_cpu_cfs_throttled_periods_total{namespace="demo", pod=~"demo-load-.*"}[5m]) / rate(container_cpu_cfs_periods_total{namespace="demo", pod=~"demo-load-.*"}[5m])`.
-   Лечится лимитом CPU в `deploy/base/demo-load.yaml`, а не правкой `demo-api`.
 
-Латентностный бюджет уже потрачен к моменту page: чинить «прямо сейчас» — снять
-задержку/перезапустить под, а не оптимизировать код.
+Признак троттлинга прибора — длительности в логах генератора, квантованные по ~100 мс
+(498/703/897/1001/1600 мс): это период CFS, в котором контейнер выбрал квоту. Метрика и
+лечение — раздел «Троттлинг генератора нагрузки».
 
 ### Троттлинг генератора нагрузки
 
@@ -1059,22 +1173,45 @@ kube-prometheus-stack.
   следующая раскатка может упереться в память. Более поздний случай (<10 %) ловит
   правило чарта `NodeMemoryHighUtilization`.
 
+### SloRulesAbsent
+
+Page-сторож записанных серий: нет `slo:demo_availability:ratio_5m` или
+`slo:demo_latency:ratio_5m` дольше 10 минут (`rules/meta.yaml`). Burn-rate алерты при этом
+молчат, и тишина выглядит как здоровый сервис.
+
+1. `/api/v1/rules` (общий блок): есть ли группа `demo-slo`, пуст ли `lastError`.
+2. `kubectl -n monitoring get prometheusrule demo-slo -o yaml | grep -n 'release:'` —
+   без метки `release: monitoring` Prometheus правило не подхватит.
+3. Живы ли серии:
+   `curl -sG --data-urlencode 'query=count(slo:demo_availability:ratio_5m)' http://prometheus.lab.internal/api/v1/query`
+   — `0` значит «правило не вычисляется».
+4. Логи `config-reloader` в поде Prometheus и события PrometheusRule: ошибка загрузки
+   правила или падение группы на вычислении.
+5. Починка: `./scripts/deploy.sh` (или `kubectl apply -k .`), затем проверить серии и
+   `ALERTS` через 1–2 интервала оценки.
+
+### SloAlertRulesAbsent
+
+Page-сторож со стороны страниц: записанные `slo:*` живы, а групп
+`demo-slo.alerts.availability` / `demo-slo.alerts.latency` нет в
+`prometheus_rule_group_rules` дольше 10 минут. То есть PrometheusRule `demo-slo-alerts` не
+подхватился: бюджет считается, а page-алертов по нему не будет вовсе.
+
+1. `/api/v1/rules` (общий блок): есть ли группы `demo-slo.alerts.*` и их `lastError`.
+2. Селектор держится на формате `<путь к файлу>;<имя группы>`, поэтому в запросе ищи
+   хвост `;demo-slo.alerts.availability`:
+   `count(prometheus_rule_group_rules{rule_group=~".*;demo-slo[.]alerts[.]availability"})`.
+3. `kubectl -n monitoring get prometheusrule demo-slo-alerts` — объект есть, метка
+   `release: monitoring` на месте, `kubectl -n monitoring logs deploy/monitoring-kube-prometheus-operator`.
+4. Починка: `./scripts/deploy.sh`, затем дождаться срабатывания группы в `/api/v1/rules`.
+   Алерт гаснет сам, когда серии группы появляются; вручную снимать не нужно.
+
 ### Сторожа правил и SLO (meta)
 
 Три сторожа в `rules/meta.yaml`, все про качество самого мониторинга, а не про
-пользователя:
+пользователя. Два page-сторожа разобраны отдельно — `SloRulesAbsent` и
+`SloAlertRulesAbsent` выше; здесь то, что осталось общим:
 
-- `SloRulesAbsent` (page) — `absent(slo:demo_availability:ratio_5m)` или
-  `absent(slo:demo_latency:ratio_5m)`. Записанных серий нет → burn-rate алерты по SLO
-  молчат, и тишина выглядит как здоровый сервис. Проверь:
-  `kubectl -n monitoring get prometheusrule | grep demo-` (метка `release=monitoring`),
-  `curl -s http://127.0.0.1:9090/api/v1/rules | jq '.data.groups[] | select(.name|startswith("demo-")) | {name, lastError}'`,
-  логи `config-reloader` в поде Prometheus.
-- `SloAlertRulesAbsent` (page) — нет групп `demo-slo.alerts.availability` или
-  `demo-slo.alerts.latency` в метрике `prometheus_rule_group_rules`: записанные `slo:*`
-  живы, а страниц нет. Первый шаг — тот же `/api/v1/rules`; селектор по `rule_group`
-  держится на формате `<путь>;<имя группы>` (проверено на стенде), поэтому ищи хвост
-  `;demo-slo.alerts.availability`.
 - `SloDemoNoTraffic` (ticket) — `demo-load` жив, но за 10 минут не отправил ни одного
   запроса — и так уже 15 минут (правило держит `for: 15m`); либо цель `demo-load`
   пропала из Prometheus совсем. Проверь под `demo-load`, его логи,

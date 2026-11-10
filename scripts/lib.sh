@@ -103,7 +103,8 @@ json_string() { python3 -c 'import json, sys; print(json.dumps(sys.argv[1]))' "$
 # Второй аргумент — куда писать рендер (по умолчанию .tmp/rendered/deploy.yaml):
 # check.sh рендерит дважды (с подстановкой адресов и без) и сравнивает результаты.
 # Env ALERT_EMAIL_TO/ALERT_EMAIL_FROM/SMTP_SMARTHOST/SMTP_USERNAME подставляет реальные
-# адреса и SMTP-хост вместо плейсхолдеров example.invalid из git.
+# адреса и SMTP-хост вместо плейсхолдеров example.invalid из git; GRAFANA_BASE_URL —
+# хост Grafana вместо плейсхолдера grafana.lab.internal в письме и в аннотациях правил.
 render_demo_manifests() {
   local tag="$1"
   local overlay="${PROJECT_ROOT}/.tmp/overlay"
@@ -115,6 +116,14 @@ render_demo_manifests() {
   if [ -n "${SMTP_SMARTHOST:-}" ]; then
     [[ "${SMTP_SMARTHOST}" =~ ^[^:]+:[0-9]+$ ]] \
       || die "SMTP_SMARTHOST='${SMTP_SMARTHOST}' не формата host:port (например smtp.example.invalid:587)"
+  fi
+  # GRAFANA_BASE_URL — хост Grafana для ссылок в письме и в аннотациях правил
+  # (dashboard_url/logs_url). В git везде плейсхолдер *.lab.internal; здесь он
+  # заменяется целиком, чтобы у человека вне лабы ссылка вела на его Grafana.
+  # Схема и хост без пути: шаблон дописывает к префиксу ?viewPanel=5 и time=…
+  if [ -n "${GRAFANA_BASE_URL:-}" ]; then
+    [[ "${GRAFANA_BASE_URL}" =~ ^https?://[A-Za-z0-9.-]+(:[0-9]+)?$ ]] \
+      || die "GRAFANA_BASE_URL='${GRAFANA_BASE_URL}' не формата http(s)://host[:port] без пути (например https://grafana.example.com)"
   fi
   # Пары «json-pointer значение»: по одной строке на заданную переменную. Патч
   # появляется только для того, что реально передали: адреса и SMTP-хост можно
@@ -170,6 +179,20 @@ render_demo_manifests() {
     fi
   } > "${overlay}/kustomization.yaml"
   kubectl kustomize --load-restrictor LoadRestrictionsNone "${overlay}" > "${out}"
+  if [ -n "${GRAFANA_BASE_URL:-}" ]; then
+    # Замена по всему рендеру, а не только в шаблоне письма: иначе письмо вело бы на
+    # новый хост, а аннотации dashboard_url/logs_url в правилах — на лабораторный.
+    # python3, а не sed: `&` в переданном значении sed трактует как backreference.
+    python3 - "${out}" "${GRAFANA_BASE_URL}" <<'PY_REPLACE'
+import sys
+
+path, base = sys.argv[1], sys.argv[2]
+with open(path, encoding="utf-8") as handle:
+    text = handle.read()
+with open(path, "w", encoding="utf-8") as handle:
+    handle.write(text.replace("http://grafana.lab.internal", base))
+PY_REPLACE
+  fi
   [ -s "${out}" ] || die "рендер манифестов пуст — проверь kustomization.yaml и deploy/base"
   printf '%s\n' "${out}"
 }

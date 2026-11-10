@@ -28,7 +28,7 @@ require_tools helm helmfile kubectl kubeconform promtool alloy
 mkdir -p "${PROJECT_ROOT}/.tmp/rendered"
 # Ворота герметичны: экспортированные в шелле SMTP_SMARTHOST/адреса меняли бы рендер
 # (а неверный формат хоста ронял бы прогон). Тестовые значения задаются явно в шагах.
-unset ALERT_EMAIL_TO ALERT_EMAIL_FROM SMTP_SMARTHOST SMTP_USERNAME
+unset ALERT_EMAIL_TO ALERT_EMAIL_FROM SMTP_SMARTHOST SMTP_USERNAME GRAFANA_BASE_URL
 # PyYAML нужен выгрузке правил в формате promtool, подсчёту групп и ассертам в
 # scripts/checks: проверяем сразу, а не трейсбеком на середине прогона.
 need_pyyaml
@@ -208,6 +208,7 @@ ROUTE_PLAIN="${PROJECT_ROOT}/.tmp/rendered/route-plain.yaml"
 ROUTE_FILLED="${PROJECT_ROOT}/.tmp/rendered/route-filled.yaml"
 ROUTE_BAD="${PROJECT_ROOT}/.tmp/rendered/route-bad.yaml"
 ROUTE_QUOTED="${PROJECT_ROOT}/.tmp/rendered/route-quoted.yaml"
+ROUTE_GRAFANA="${PROJECT_ROOT}/.tmp/rendered/route-grafana.yaml"
 ( unset ALERT_EMAIL_TO ALERT_EMAIL_FROM SMTP_SMARTHOST SMTP_USERNAME
   render_demo_manifests ci-route "${ROUTE_PLAIN}" >/dev/null )
 ( export ALERT_EMAIL_TO=page@example.invalid SMTP_SMARTHOST=smtp.example.invalid:587
@@ -216,6 +217,10 @@ ROUTE_QUOTED="${PROJECT_ROOT}/.tmp/rendered/route-quoted.yaml"
 # экранирует, а собранный вручную YAML не рвётся на «плохом» адресе.
 ( export ALERT_EMAIL_FROM='Alert Manager <alertmanager@example.invalid>, ops'
   render_demo_manifests ci-route "${ROUTE_QUOTED}" >/dev/null )
+# GRAFANA_BASE_URL меняет хост Grafana и в письме, и в аннотациях правил (dashboard_url,
+# logs_url): иначе ссылки в одном уведомлении вели бы в две разные Grafana.
+( export GRAFANA_BASE_URL=http://grafana.example.com
+  render_demo_manifests ci-route "${ROUTE_GRAFANA}" >/dev/null )
 # Негативный прогон: хост без порта обязан упасть. Валидация, проверенная только руками
 # (так было записано в CHANGELOG), пропустила бы опечатку до самого apply.
 if ( export SMTP_SMARTHOST=smtp.example.invalid
@@ -224,7 +229,21 @@ if ( export SMTP_SMARTHOST=smtp.example.invalid
 fi
 [ ! -e "${ROUTE_BAD}" ] || rm -f "${ROUTE_BAD}"
 python3 "${PROJECT_ROOT}/scripts/checks/route_tree.py" \
-  "${ROUTE_PLAIN}" "${ROUTE_FILLED}" "${ROUTE_QUOTED}"
+  "${ROUTE_PLAIN}" "${ROUTE_FILLED}" "${ROUTE_QUOTED}" "${ROUTE_GRAFANA}"
+
+# --- 4c-2. Шаблон письма: рендер без кластера --------------------------------
+# Ошибка выполнения шаблона не портит письмо, а отменяет уведомление целиком
+# (Alertmanager ретраит недоставленное), а toDuration/арифметики в его движке нет.
+# Шаблон выгружается PyYAML, рендерится stdlib-движком Go (email_template.go):
+# рендер настоящим Alertmanager потребовал бы образа и сети.
+step "шаблон письма: рендер без кластера"
+if command -v go >/dev/null 2>&1; then
+  python3 "${PROJECT_ROOT}/scripts/checks/email_templates.py" \
+    "${ROUTE_PLAIN}" "${PROJECT_ROOT}/.tmp/rendered"
+  go run "${PROJECT_ROOT}/scripts/checks/email_template.go" "${PROJECT_ROOT}/.tmp/rendered"
+else
+  SKIPPED+=("шаблон письма: рендер (нет go)")
+fi
 
 # --- 4d. Loki ruler: правило по логам в рендере -------------------------------
 # Правило Loki читает ruler из ConfigMap: ни kubeconform, ни promtool эту цепочку не

@@ -107,12 +107,63 @@ spec:
           # TLS), на 587 — апгрейдом через STARTTLS.
           requireTLS: true
           sendResolved: true
-          # Только text, без html: письмо уходит multipart/alternative, экранирование
-          # html не нужно, а битая вёрстка — лишний повод не верить уведомлению.
-          # Плейсхолдеры шаблона разрешает Alertmanager на этапе отправки.
+          # Письмо — multipart/alternative: свой text и свой html. До 2026-11-10 html не
+          # задавали, и клиент показывал дефолтный шаблон Alertmanager (все labels и
+          # annotations таблицей, ссылки не гиперссылками); теперь состав письма наш.
+          #
+          # Почему ссылки на логи собраны из `time`/`time.window`, а не из «startsAt минус
+          # for»: startsAt — это момент, когда истёк for (Prometheus отправляет FiredAt),
+          # но арифметики в шаблонах Alertmanager 0.34.1 нет — `toDuration` не определена,
+          # проверено прогоном на этом пине. `time` + `time.window` даёт окно
+          # `time ± window/2` без единой операции: ±15 минут вокруг срабатывания.
+          # Вторая ссылка (`from=startsAt&to=now`) отвечает на «что происходит сейчас».
+          #
+          # Почему MSK, а не UTC: `tz "Europe/Moscow"` проверен на живом образе —
+          # /usr/share/zoneinfo/Europe/Moscow в контейнере есть. Если однажды tzdata из
+          # образа уберут, ошибка шаблона сорвёт отправку целиком, а не только время.
+          # Хост Grafana — плейсхолдер `grafana.lab.internal` (как в dashboard_url правил);
+          # scripts/lib.sh заменяет его на GRAFANA_BASE_URL при рендере.
           text: |
             {{ range .Alerts }}{{ .Status | toUpper }} [{{ .Labels.severity }}] {{ .Labels.alertname }}
-            {{ .Annotations.summary }}
-            {{ with .Annotations.runbook_url }}runbook: {{ . }}{{ end }}
+            {{ with .Labels.service }}Сервис: {{ . }}
+            {{ end }}{{ .Annotations.summary }}
+            {{ with .Annotations.description }}{{ . }}
+            {{ end }}{{ if .Annotations.runbook_url }}Ранбук: {{ .Annotations.runbook_url }}
+            {{ end }}{{ if .Annotations.dashboard_url }}Дашборд: {{ .Annotations.dashboard_url }}
+            {{ end }}{{ if .Annotations.logs_url }}Логи, окно инцидента (±15 мин):
+            {{ .Annotations.logs_url }}&time={{ .StartsAt.UnixMilli }}&time.window=1800000
+            Логи, что сейчас:
+            {{ .Annotations.logs_url }}&from={{ .StartsAt.UnixMilli }}&to=now
+            {{ end }}Сработал: {{ .StartsAt | tz "Europe/Moscow" | date "02.01.2006 15:04:05 MST" }}
+            ({{ .StartsAt | date "2006-01-02 15:04:05" }} UTC)
+            {{ end }}Стенд: {{ .ExternalURL }}
+          html: |
+            <div style="font-family: -apple-system, Segoe UI, Arial, sans-serif; font-size: 14px;">
+            {{ range .Alerts }}
+            <p style="margin: 0 0 8px;">
+            <strong>{{ .Status | toUpper }} [{{ .Labels.severity }}] {{ .Labels.alertname }}</strong>
+            {{ with .Labels.service }}Сервис: {{ . }}<br>
+            {{ end }}{{ .Annotations.summary }}
+            </p>
+            {{ with .Annotations.description }}<p style="margin: 0 0 8px;">{{ . }}</p>
             {{ end }}
-            Стенд: {{ .ExternalURL }}
+            <p style="margin: 0 0 8px;">
+            {{ if .Annotations.runbook_url }}<a
+            href="{{ .Annotations.runbook_url }}">Ранбук: пошаговая диагностика</a><br>
+            {{ end }}{{ if .Annotations.dashboard_url }}<a
+            href="{{ .Annotations.dashboard_url }}">Дашборд</a><br>
+            {{ end }}{{ if .Annotations.logs_url }}<a
+            href="{{ .Annotations.logs_url }}&amp;time={{ .StartsAt.UnixMilli }}&amp;time.window=1800000"
+            >Логи: окно инцидента (±15 мин)</a><br>
+            <a href="{{ .Annotations.logs_url }}&amp;from={{ .StartsAt.UnixMilli }}&amp;to=now"
+            >Логи: что сейчас</a><br>
+            {{ end }}<a href="{{ .GeneratorURL }}">Source (Prometheus)</a><br>
+            <a href="{{ $.ExternalURL }}">Alertmanager</a>
+            </p>
+            <p style="margin: 0 0 8px; color: #555;">
+            Сработал: {{ .StartsAt | tz "Europe/Moscow" | date "02.01.2006 15:04:05 MST" }}
+            ({{ .StartsAt | date "2006-01-02 15:04:05" }} UTC)
+            </p>
+            {{ end }}
+            <p style="margin: 0; color: #888; font-size: 12px;">Стенд: {{ .ExternalURL }}</p>
+            </div>
