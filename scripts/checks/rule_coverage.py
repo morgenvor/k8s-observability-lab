@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
 """Ассерт покрытия правил юнит-тестами и соглашения о `severity`.
 
-`promtool test rules` проверяет только те правила, для которых есть тест: новый алерт
-без теста проходит ворота молча. То же с `severity`: опечатка (`warning` вместо
-`ticket`) не ломает ни promtool, ни рендер, но уводит уведомление в catch-all.
+`promtool test rules` проверяет только те правила, для которых есть тест, и только тот
+сценарий, который в тесте описан: новый алерт без теста проходит ворота молча, а алерт,
+у которого есть только кейс «не горит», не проверен на срабатывание вовсе — сломанное
+выражение, которое никогда не станет истинным, выглядит как зелёный тест.
 
-Своё соглашение (AGENTS, раздел «Алерты»): `severity ∈ {page, ticket}`, `info` не
-ставим — его глушит чартовый `InfoInhibitor` (`source: alertname="InfoInhibitor"` →
-`target: severity="info"`, `equal: [namespace]`), поэтому одиночный info не доходит до
-alert-sink.
+Опечатка в `severity` не ломает ни promtool, ни рендер, но уводит уведомление в
+catch-all. Своё соглашение — в `AGENTS.md`, раздел «Алерты»: `severity ∈ {page, ticket}`,
+`info` не ставим, потому что чартовый `InfoInhibitor` глушит одиночный info.
 
 Использование: rule_coverage.py <каталог-rulefiles> <каталог-тестов>
 """
@@ -21,31 +21,59 @@ from common import fail, load_docs
 
 SEVERITIES = {"page", "ticket"}
 
+# Алерты, у которых тест описывает только «не горит». Срабатывающий кейс требует
+# подобрать серии под окна 6x (30m/6h) и 1x (3d) — это отдельная задача про правила,
+# а не про ворота. Запись здесь — видимый долг: новый алерт без срабатывающего кейса
+# валит ворота, а когда кейс появится, запись надо убрать (ассерт это проверит).
+NEGATIVE_ONLY_ALLOWED = {
+    "SloDemoAvailabilityBurnMedium",
+    "SloDemoLatencyBurnMedium",
+    "SloDemoLatencyBurnSlow",
+}
 
-def alerts_in_rules(rulefiles_dir):
-    alerts = {}
+
+def alert_definitions(rulefiles_dir):
+    """Все объявления алертов. Дубль имени — провал: иначе проверяется только последний."""
+    definitions = []
+    sources = {}
     for path in sorted(glob.glob(os.path.join(rulefiles_dir, "*.yaml"))):
         for doc in load_docs(path):
             for group in doc.get("groups") or []:
                 for rule in group.get("rules") or []:
                     name = rule.get("alert")
-                    if name:
-                        alerts[name] = rule
-    return alerts
+                    if not name:
+                        continue
+                    definitions.append((name, rule))
+                    sources.setdefault(name, []).append(os.path.basename(path))
+    duplicated = {name: files for name, files in sources.items() if len(files) > 1}
+    if duplicated:
+        detail = "; ".join(f"{name} ({', '.join(files)})" for name, files in sorted(duplicated.items()))
+        fail(
+            f"алерт объявлен несколько раз под одним именем: {detail} —"
+            " проверялось бы только последнее определение, остальные ушли бы в кластер"
+        )
+    if not definitions:
+        fail(f"{rulefiles_dir}: не найдено ни одного алерта — проверять нечего")
+    return definitions
 
 
-def alerts_in_tests(tests_dir):
+def test_cases(tests_dir):
     paths = sorted(glob.glob(os.path.join(tests_dir, "*.test.yaml")))
     if not paths:
         fail(f"{tests_dir}: нет файлов *.test.yaml — promtool test rules нечего проверять")
-    tested = set()
+    cases = {}
     for path in paths:
         for doc in load_docs(path):
-            for case in doc.get("tests") or []:
-                for entry in case.get("alert_rule_test") or []:
-                    if entry.get("alertname"):
-                        tested.add(entry["alertname"])
-    return tested
+            for test in doc.get("tests") or []:
+                for entry in test.get("alert_rule_test") or []:
+                    name = entry.get("alertname")
+                    if not name:
+                        continue
+                    stats = cases.setdefault(name, {"cases": 0, "firing": 0})
+                    stats["cases"] += 1
+                    if entry.get("exp_alerts"):
+                        stats["firing"] += 1
+    return cases
 
 
 def main():
@@ -53,17 +81,18 @@ def main():
         fail("использование: rule_coverage.py <каталог-rulefiles> <каталог-тестов>")
     rulefiles_dir, tests_dir = sys.argv[1], sys.argv[2]
 
-    alerts = alerts_in_rules(rulefiles_dir)
-    if not alerts:
-        fail(f"{rulefiles_dir}: не найдено ни одного алерта — проверять нечего")
-
-    for name, rule in sorted(alerts.items()):
+    definitions = alert_definitions(rulefiles_dir)
+    for name, rule in definitions:
         severity = (rule.get("labels") or {}).get("severity")
         if severity not in SEVERITIES:
+            hint = (
+                " `info` глушится чартовым InfoInhibitor и до alert-sink не доходит"
+                if severity == "info"
+                else ""
+            )
             fail(
                 f"{name}: severity={severity!r}, ожидалось одно из {sorted(SEVERITIES)}."
-                " `info` глушится чартовым InfoInhibitor и до alert-sink не доходит"
-                " (AGENTS, раздел «Алерты»)"
+                f"{hint} (AGENTS, раздел «Алерты»)"
             )
         if not rule.get("for"):
             fail(f"{name}: не задан `for` — алерт срабатывает мгновенно, без окна на флап")
@@ -72,23 +101,44 @@ def main():
             if not annotations.get(key):
                 fail(f"{name}: пустой annotations.{key} — уведомление без описания или процедуры")
 
-    tested = alerts_in_tests(tests_dir)
-    untested = sorted(set(alerts) - tested)
+    names = {name for name, _ in definitions}
+    cases = test_cases(tests_dir)
+
+    untested = sorted(names - set(cases))
     if untested:
         fail(
             f"алерты без теста в {tests_dir}: {', '.join(untested)} —"
             " promtool проверяет только покрытые, новый алерт прошёл бы молча"
         )
-    orphan = sorted(tested - set(alerts))
+    orphan = sorted(set(cases) - names)
     if orphan:
         fail(
             f"тесты ссылаются на несуществующие алерты: {', '.join(orphan)} —"
             " переименование правила оставило тест «зелёным»"
         )
 
+    silent = sorted(
+        name for name in cases if cases[name]["firing"] == 0 and name not in NEGATIVE_ONLY_ALLOWED
+    )
+    if silent:
+        fail(
+            f"тесты этих алертов описывают только «не горит»: {', '.join(silent)} —"
+            " сломанное выражение, которое никогда не станет истинным, прошло бы проверку."
+            " Добавь кейс с непустым exp_alerts"
+        )
+    stale = sorted(
+        name for name in NEGATIVE_ONLY_ALLOWED if cases.get(name, {}).get("firing", 0) > 0
+    )
+    if stale:
+        fail(
+            f"запись в NEGATIVE_ONLY_ALLOWED устарела: у {', '.join(stale)} уже есть"
+            " срабатывающий кейс — убери имя из списка в rule_coverage.py"
+        )
+
+    firing = sum(1 for name in cases if cases[name]["firing"] > 0)
     print(
-        f"правила: алертов {len(alerts)}, покрыто тестами {len(tested)},"
-        " severity ∈ {page, ticket}"
+        f"правила: алертов {len(names)}, покрыто тестами {len(cases)},"
+        f" со срабатывающим кейсом {firing}, severity ∈ {{page, ticket}}"
     )
 
 

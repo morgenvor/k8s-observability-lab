@@ -63,7 +63,8 @@ gh api -X PUT repos/morgenvor/k8s-observability-lab/branches/main/protection \
 Workflow `.github/workflows/ci.yml` запускается на push в `main` и на pull request.
 Локальный аналог — `./scripts/check.sh --strict`. Разница в окружении: в образе раннера
 `shellcheck` и `docker` есть сразу, `yamllint` и `pyyaml` ставит отдельный шаг
-(`python3 -m pip install yamllint pyyaml` — pyyaml нужен выгрузке `PrometheusRule`),
+(`python3 -m pip install yamllint==1.38.0 pyyaml==6.0.2` — версии пинованы, источник
+истины — `.github/workflows/ci.yml`; pyyaml нужен выгрузке `PrometheusRule`),
 а инструменты из `bootstrap-tools.sh` скачиваются в CI так же, как локально.
 
 ```bash
