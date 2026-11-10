@@ -122,7 +122,47 @@ tests:
 
   # --- Быстрый сторож целей ------------------------------------------------
   # Чартовый TargetDown ждёт 10 минут и считает долю in group, поэтому короткая
-  # потеря цели проверяется только этим правилом. Порог for: 2m — граница.
+  # потеря цели проверяется только этим правилом. Порог for: 2m проверяется с двух
+  # сторон: на 90-й секунде алерт ещё pending, на третьей минуте — уже firing.
+  # Метки в тестах упрощены (namespace/job/pod/instance): у реального `up` из
+  # ServiceMonitor есть ещё service/endpoint/container, но на выражение они не влияют.
+  - name: "граница for: 2m — на 90-й секунде ещё не горит"
+    interval: 1m
+    input_series:
+      - series: 'up{namespace="demo",job="demo-api",pod="demo-api-1",instance="10.0.0.10:8080"}'
+        values: '0x20'
+    alert_rule_test:
+      - eval_time: 90s
+        alertname: DemoTargetDownFast
+        exp_alerts: []
+
+  - name: "граница for: 2m — на третьей минуте горит"
+    interval: 1m
+    input_series:
+      - series: 'up{namespace="demo",job="demo-api",pod="demo-api-1",instance="10.0.0.10:8080"}'
+        values: '0x20'
+    alert_rule_test:
+      - eval_time: 3m
+        alertname: DemoTargetDownFast
+        exp_alerts:
+          - exp_labels:
+              severity: ticket
+              namespace: demo
+              job: demo-api
+              pod: demo-api-1
+              instance: 10.0.0.10:8080
+            exp_annotations:
+              summary: "Цель demo-api (demo-api-1) недоступна дольше 2 минут"
+              description: >-
+                Prometheus не может собрать /metrics цели дольше двух минут: под не
+                отвечает, сеть до него не работает или сломан ServiceMonitor. Чарт
+                замечает то же событие только через 10–15 минут (TargetDown по доле
+                в группе job, KubePodNotReady), поэтому при коротких инцидентах
+                уведомление приходит только отсюда. Проверь под и его логи, лимиты
+                (container_cpu_cfs_throttled_periods_total — заморозка по CFS даёт те
+                же симптомы, что сетевая недоступность) и пробы.
+              runbook_url: "https://github.com/morgenvor/k8s-observability-lab/blob/main/docs/runbook.md#цель-demo-недоступна-дольше-двух-минут"
+
   - name: "цель demo-api недоступна дольше 2 минут: DemoTargetDownFast горит"
     interval: 1m
     input_series:
@@ -150,7 +190,7 @@ tests:
                 же симптомы, что сетевая недоступность) и пробы.
               runbook_url: "https://github.com/morgenvor/k8s-observability-lab/blob/main/docs/runbook.md#цель-demo-недоступна-дольше-двух-минут"
 
-  # Границы с двух сторон: часовой блип короче for, цель вне namespace demo не наша.
+  # Границы с двух сторон: минутный блип короче for, цель вне namespace demo не наша.
   - name: "цель моргнула на минуту: DemoTargetDownFast молчит"
     interval: 1m
     input_series:

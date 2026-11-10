@@ -501,14 +501,16 @@ curl -s http://127.0.0.1:9090/api/v1/rules | jq '.data.groups[] | select(.name|s
     | jq -r '.data.result[].metric.rule_group'
   ```
 
-  Ожидается 10 групп (две `demo-slo`, две `demo-slo-alerts`, две `demo-infra`,
-  `demo-meta.pipeline`, две `demo-logs-pipeline`, `demo-alerting-path.heartbeat`). Если правило горит — группа
+  Ожидается 11 групп (две `demo-slo`, две `demo-slo-alerts`, две `demo-infra`,
+  `demo-meta.pipeline`, `demo-meta.generator`, две `demo-logs-pipeline`,
+  `demo-alerting-path.heartbeat`). Если правило горит — группа
   `demo-slo-alerts` не загрузилась или падает: смотри `/api/v1/rules` и `lastError`,
   метку `release=monitoring` у PrometheusRule `demo-slo-alerts`. `scripts/deploy.sh`
   проверяет тот же селектор сразу после apply, чтобы неверный формат метки не дал
   ложный page (проверка через 10 минут после apply — раздел «Приёмка после деплоя»).
-- Своих инфраструктурных правил тринадцать: `KubePodOOMKilled`, `PVCNearlyFull` (>85 %
-  занято, без прогноза роста) и `NodeMemoryAvailableLow` (<15 % свободной памяти узла)
+- Своих инфраструктурных правил четырнадцать: `KubePodOOMKilled`, `PVCNearlyFull` (>85 %
+  занято, без прогноза роста), `NodeMemoryAvailableLow` (<15 % свободной памяти узла) и
+  `DemoTargetDownFast` (цель недоступна дольше 2 минут)
   в `rules/infra.yaml` плюс десять правил пайплайна логов в `rules/pipeline.yaml`
   (список — следующим пунктом). Остальная инфраструктура (узлы, диски, `TargetDown`,
   перезагрузка конфига Prometheus, сбои уведомлений Alertmanager) приходит от чарта
@@ -896,9 +898,8 @@ Fast требует реакции в минутах: сначала восст�
    заморозка попадает в бюджет. Признак — длительности в логах генератора квантуются
    по ~100 мс (498/703/897/1001/1600 мс): это период CFS, в котором контейнер выбрал
    квоту. Смотри троттлинг пода `demo-load`:
-   `rate(container_cpu_cfs_throttled_periods_total[5m]) /
-   rate(container_cpu_cfs_periods_total[5m]){pod=~"demo-load-.*"}`. Лечится лимитом
-   CPU в `deploy/base/demo-load.yaml`, а не правкой `demo-api`.
+   `rate(container_cpu_cfs_throttled_periods_total{namespace="demo", pod=~"demo-load-.*"}[5m]) / rate(container_cpu_cfs_periods_total{namespace="demo", pod=~"demo-load-.*"}[5m])`.
+   Лечится лимитом CPU в `deploy/base/demo-load.yaml`, а не правкой `demo-api`.
 
 Латентностный бюджет уже потрачен к моменту page: чинить «прямо сейчас» — снять
 задержку/перезапустить под, а не оптимизировать код.
@@ -955,9 +956,12 @@ Fast требует реакции в минутах: сначала восст�
    Дальше любым CDP-клиентом (Node 22 умеет `WebSocket` из коробки): `Profiler.enable`,
    `Profiler.setSamplingInterval {interval:1000}`, `Profiler.start`, пауза,
    `Profiler.stop`; агрегировать `nodes[].hitCount` по `callFrame.functionName`.
-   Инспектор слушает только `127.0.0.1` внутри пода, но **остаётся открытым до
-   рестарта контейнера** — после съёма профиля перезапусти под:
-   `kubectl -n demo rollout restart deploy/demo-load`.
+   Инспектор слушает только `127.0.0.1` **внутри пода**, поэтому клиент либо запускается
+   там же через `kubectl exec` (проще всего — тот же `node -e`), либо нужен проброс:
+   `kubectl -n demo port-forward deploy/demo-load 9229:9229`. `SIGUSR1` PID 1 проходит
+   потому, что `kubectl exec` работает под тем же UID 1000, что и процесс приложения.
+   Инспектор **остаётся открытым до рестарта контейнера** — после съёма профиля
+   перезапусти под: `kubectl -n demo rollout restart deploy/demo-load`.
 
 Что уже исключено замерами 09–10.11, чтобы не искать заново: сеть и сам сервис (с ноды
 тот же путь p50 3–5 мс), медленный апстрим (при задержке 400 мс цена запроса осталась
@@ -991,8 +995,11 @@ Fast требует реакции в минутах: сначала восст�
    симптомы (цель не отвечает), что и сеть, — лимиты лежат в `deploy/base/*.yaml`.
 3. `up` и `scrape_duration_seconds` по цели: если длительность скрейпа растёт до
    таймаута, виноват под, а не сеть.
-4. Если цель пропала из Prometheus совсем (серии `up` нет), это другое событие:
-   `AlertSinkTargetMissing` и `SloDemoNoTraffic`.
+4. Если цель пропала из Prometheus совсем (серии `up` нет), это другое событие, и
+   покрыто оно только частично: `AlertSinkTargetMissing` — для `alert-sink`,
+   `SloDemoNoTraffic` — для `demo-load`. Для `demo-api` отдельного правила на
+   исчезновение цели **нет**: пропажу видно только по SLO burn-rate, потому что
+   клиентские метрики продолжают считать отказы. Это известная дыра, а не покрытие.
 
 Почему `ticket`, а не `page`: при двух репликах `demo-api` потеря одной не лишает
 пользователя сервиса, а бюджет ошибок в этом случае тратится медленно, и о нём
