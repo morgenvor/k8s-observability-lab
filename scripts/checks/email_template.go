@@ -270,7 +270,7 @@ func main() {
 		nowMS,
 		"10.11.2026 14:26:33 MSK",
 		"2026-11-10 11:26:33 UTC",
-		"Стенд: http://alertmanager.example.com",
+		"Alertmanager (силенсы, статус): http://alertmanager.example.com",
 	)
 	requireAbsent("text (page)", pageText, "{{", "}}")
 
@@ -288,6 +288,11 @@ func main() {
 		"10.11.2026 14:26:33 MSK",
 	)
 	requireAbsent("html (page)", pageHTML, `href=""`, "{{", "}}")
+	// Ровно одна ссылка на сам стенд: «Alertmanager» в блоке ссылок и подвал «Стенд: …»
+	// дублировали друг друга в письме владельца (замечание 2026-11-10) — считаем href.
+	if n := strings.Count(pageHTML, `href="http://alertmanager.example.com"`); n != 1 {
+		fail("html (page): ссылок на Alertmanager %d, ожидалась ровно одна — дубль вёрнулся", n)
+	}
 
 	// 2. Чартовый critical без наших аннотаций: ссылки на демо-дашборд и пустые href
 	//    не появляются — иначе письмо вело бы на чужой дашборд.

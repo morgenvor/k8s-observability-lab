@@ -137,7 +137,7 @@ spec:
             {{ end }}{{ if eq .Status "firing" }}Сработал{{ else }}Закрыт{{ end }}:
             {{ .StartsAt | tz "Europe/Moscow" | date "02.01.2006 15:04:05 MST" }}
             ({{ .StartsAt.UTC | date "2006-01-02 15:04:05" }} UTC)
-            {{ end }}Стенд: {{ .ExternalURL }}
+            {{ end }}Alertmanager (силенсы, статус): {{ .ExternalURL }}
           html: |
             <div style="font-family: -apple-system, Segoe UI, Arial, sans-serif; font-size: 14px;">
             {{ range .Alerts }}
@@ -168,5 +168,4 @@ spec:
             ({{ .StartsAt.UTC | date "2006-01-02 15:04:05" }} UTC)
             </p>
             {{ end }}
-            <p style="margin: 0; color: #888; font-size: 12px;">Стенд: {{ .ExternalURL }}</p>
             </div>
