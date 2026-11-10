@@ -182,6 +182,7 @@ rules` — `SUCCESS`. Чарты снова из локальных копий (
 | 2026-11-10 | арифметика в шаблонах Alertmanager | локальный рендер шаблона пакетом `alertmanager/template` версии `v0.34.1` (`go run`) | text и html собираются, `.StartsAt.UnixMilli` = `1794309993000`, `tz` даёт `10.11.2026 14:26:33 MSK`; `{{ toDuration "-15m" }}` → `function "toDuration" not defined` — «startsAt минус for» вычислить нечем |
 | 2026-11-10 | параметры URL Grafana 13.2.4 | бандлы из `/public/build/*.js` (`grep`) | `viewPanel` (8 вхождений) и `time.window` присутствуют в отданных чанках — ссылка «окно инцидента» опирается на документированный формат `time`+`time.window` |
 | 2026-11-10 | deep link из письма и аутентификация UI | `curl -o /dev/null -w '%{redirect_url}'` | `302 → /login?redirectTo=%2Fd%2Fdemo-red%3FviewPanel%3D5%26time%3D…` — после входа человек попадает на нужный вид; Grafana требует логин (`/api/dashboards/uid/demo-red` → 401), Prometheus и Alertmanager — без аутентификации |
+| 2026-11-10 | шаблон письма в живом контуре | `kubectl apply -f rules/demo-slo-alerts.yaml -f rules/meta.yaml`; JSON6902-патч `emailConfigs[0].{text,html}` на живом `AlertmanagerConfig` (адреса и Secret не тронуты); `POST /api/v2/alerts`; `/metrics` Alertmanager, `/timeline` sink | после apply правила отдают новые анкоры и `logs_url` (`/api/v1/rules`: `slodemoavailabilityburnfast`, `logs_url: да`), у meta-сторожей `logs_url` нет; `alertmanager_config_last_reload_successful = 1`, в сгенерированном конфиге шаблон есть (`grep` «Ранбук: пошаговая диагностика» = 1, `time.window=1800000` = 2); проба `EmailProbePage` (`page`) → `alertmanager_notifications_total{integration="email"} = 1`, `increase(failed_total{integration="email"}[10m]) = 0`, запись в `/timeline` `12:55:14Z` со `starts_at 12:55:02Z` (письмо ушло и в sink по `continue`); вид и вручение письма проверяет владелец |
 | 2026-11-10 | свои info-алерты → `ticket` в живом кластере | `kubectl apply -f rules/pipeline.yaml -f rules/meta.yaml` (+ `rules/notifications.yaml`), `/api/v1/rules`, `prometheus_rule_group_rules` | `LokiNotIngesting` и `SloDemoNoTraffic` — `severity=ticket`, `health=ok`, `lastError` нет; `ALERTS` по ним пусто; своих `info` не осталось (23 `ticket`, 4 `page`, 27 алертов). Побочно: `PrometheusRule demo-alerting-path` в кластере **отсутствовал** (три heartbeat-правила были только в git) — применён, групп проекта стало 11 вместо 10 |
 
 Как проверить это повторно (временное правило по реальному трафику, без выдуманных строк
@@ -189,8 +190,10 @@ rules` — `SUCCESS`. Чарты снова из локальных копий (
 
 ## Ещё не подтверждено живьём
 
-- письмо с новым `text`/`html` на стенде не отправлялось: нужен `./scripts/deploy.sh` с
-  e-mail env и проба `page` (действие владельца), иначе доказано только офлайн-рендером;
+- письмо с новым `text`/`html` **отправлено** 2026-11-10 пробой `EmailProbePage`: SMTP принял
+  (`failed_total = 0`), запись пришла в `/timeline`. Вручение и внешний вид проверяет
+  владелец; живой page-алерт от SLO (с `$value` в `description` и `GeneratorURL`) ещё
+  не приходил — только проба через API;
 - `startsAt = FiredAt` («после `for`») подтверждено по коду Prometheus
   (`rules.SendAlerts`), но не живым алертом: сейчас firing только `Watchdog` без `for`.
   Подтверждение — первый дрилл: сравнить `starts_at` в `/timeline` с временем инъекции;
