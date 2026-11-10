@@ -89,6 +89,17 @@ export function createMetrics() {
     registers: [registry],
   });
 
+  // Время начала алерта (startsAt из payload). Счётчик его не несёт: в Grafana таблица
+  // instant-запроса показывает в колонке Time момент самого запроса, то есть «сейчас», и
+  // по таблице нельзя было понять, когда алерт начался. Метки те же, что у счётчика,
+  // поэтому кардинальность ограничена тем же лимитом имён.
+  const alertStarted = new Gauge({
+    name: 'alertsink_alert_start_timestamp_seconds',
+    help: 'Unix-время начала алерта (startsAt), последнее по паре alertname/status',
+    labelNames: ['alertname', 'status'],
+    registers: [registry],
+  });
+
   const lastNotification = new Gauge({
     name: 'alertsink_last_notification_timestamp_seconds',
     help: 'Unix-время последнего принятого уведомления',
@@ -105,7 +116,7 @@ export function createMetrics() {
     registers: [registry],
   });
 
-  return { registry, notifications, alertEvents, lastNotification, requests };
+  return { registry, notifications, alertEvents, alertStarted, lastNotification, requests };
 }
 
 // Валидация обязательных полей Alertmanager v2. Возвращает текст ошибки или null:
@@ -142,6 +153,15 @@ export function validatePayload(payload) {
     }
   }
   return null;
+}
+
+// Время начала алерта: startsAt Alertmanager (RFC3339). Поле не входит в обязательные
+// (payload приходит и от чужих клиентов), поэтому отсутствие или мусор — не 400, а
+// время приёма: пара обязана получить значение, иначе таблица покажет «нет данных» и
+// отличить «алертов не было» от «время потеряли» будет нельзя.
+function alertStartSeconds(alert, receivedAt) {
+  const parsed = typeof alert.startsAt === 'string' ? Date.parse(alert.startsAt) : Number.NaN;
+  return Number.isFinite(parsed) ? parsed / 1000 : receivedAt.getTime() / 1000;
 }
 
 function topSeverity(alerts) {
@@ -262,6 +282,9 @@ export function createApp({
   // Различные alertname, уже создавшие серию в метрике. Ограничение действует на
   // весь процесс: Set растёт до MAX_DISTINCT_ALERTNAMES и дальше не пополняется.
   const seenAlertnames = new Set();
+  // Начало алерта по паре alertname/status — та же граница кардинальности, что у
+  // счётчика: Map растёт вместе с seenAlertnames (≤ MAX_DISTINCT_ALERTNAMES × 2).
+  const alertStarts = new Map();
 
   const record = (payload) => {
     const receivedAt = clock();
@@ -283,14 +306,26 @@ export function createApp({
       const alertname = alert.labels.alertname;
       // Имя сверх лимита не создаёт новую серию: кардинальность метрики ограничена
       // даже если клиент присылает уникальные имена. В /timeline имя настоящее.
+      let seriesName = alertname;
       if (!seenAlertnames.has(alertname)) {
         if (seenAlertnames.size >= MAX_DISTINCT_ALERTNAMES) {
-          metrics.alertEvents.inc({ alertname: 'other', status: alert.status });
-          continue;
+          seriesName = 'other';
+        } else {
+          seenAlertnames.add(alertname);
         }
-        seenAlertnames.add(alertname);
       }
-      metrics.alertEvents.inc({ alertname, status: alert.status });
+      metrics.alertEvents.inc({ alertname: seriesName, status: alert.status });
+
+      // Начало алерта — максимум по паре: повторное уведомление о том же горящем
+      // алерте несёт тот же startsAt, а новый экземпляр — более поздний; доставка
+      // вне порядка не должна откатывать время назад.
+      const started = alertStartSeconds(alert, receivedAt);
+      const key = `${seriesName}\u0000${alert.status}`;
+      const previous = alertStarts.get(key);
+      if (previous === undefined || started > previous) {
+        alertStarts.set(key, started);
+        metrics.alertStarted.set({ alertname: seriesName, status: alert.status }, started);
+      }
     }
     metrics.lastNotification.set(receivedAt.getTime() / 1000);
 

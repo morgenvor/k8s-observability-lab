@@ -196,6 +196,45 @@ test('метрики: уведомления по статусу и severity, с
   );
 });
 
+test('метрики: время начала алерта — из startsAt, без него — время приёма', async (t) => {
+  const receivedAt = Date.parse('2026-11-04T15:30:00Z') / 1000;
+  const { base } = await startApp(t, { clock: () => new Date('2026-11-04T15:30:00Z') });
+  // FIRING_PAYLOAD несёт настоящий startsAt: панель обязана показать его, а не время
+  // приёма (в табличном instant-запросе Grafana иначе подставляет «сейчас»).
+  await postWebhook(base, FIRING_PAYLOAD);
+  // Чужой клиент может не прислать startsAt: пара всё равно получает время, иначе
+  // «нет данных» в таблице не отличить от «алертов не было».
+  await postWebhook(base, {
+    status: 'resolved',
+    alerts: [{ status: 'resolved', labels: { alertname: 'Watchdog' } }],
+  });
+  let body = await (await fetch(`${base}/metrics`)).text();
+  assert.equal(
+    metricValue(body, 'alertsink_alert_start_timestamp_seconds', {
+      alertname: 'SloDemoAvailabilityBurnFast',
+      status: 'firing',
+    }),
+    Date.parse('2026-11-04T15:00:00Z') / 1000,
+  );
+  assert.equal(metricValue(body, 'alertsink_alert_start_timestamp_seconds', { alertname: 'Watchdog' }), receivedAt);
+
+  // Уведомление вне порядка с более ранним startsAt не откатывает время назад.
+  await postWebhook(base, {
+    status: 'firing',
+    alerts: [
+      { status: 'firing', labels: { alertname: 'SloDemoAvailabilityBurnFast' }, startsAt: '2026-11-04T14:00:00Z' },
+    ],
+  });
+  body = await (await fetch(`${base}/metrics`)).text();
+  assert.equal(
+    metricValue(body, 'alertsink_alert_start_timestamp_seconds', {
+      alertname: 'SloDemoAvailabilityBurnFast',
+      status: 'firing',
+    }),
+    Date.parse('2026-11-04T15:00:00Z') / 1000,
+  );
+});
+
 test(`кольцо /timeline хранит последние ${TIMELINE_SIZE} уведомлений`, async (t) => {
   const { base } = await startApp(t);
   const total = TIMELINE_SIZE + 5;
@@ -425,6 +464,9 @@ test(`различных alertname не больше ${MAX_DISTINCT_ALERTNAMES}:
   const overflowName = `Unique${MAX_DISTINCT_ALERTNAMES}`;
   const body = await (await fetch(`${base}/metrics`)).text();
   assert.equal(metricValue(body, 'alertsink_alert_events_total', { alertname: 'other' }), 1);
+  // Время начала уходит в ту же серию: кардинальность новой метрики ограничена тем же
+  // лимитом имён, иначе 201-е имя создало бы её отдельно от счётчика.
+  assert.ok(metricValue(body, 'alertsink_alert_start_timestamp_seconds', { alertname: 'other' }) > 0);
   assert.ok(!body.includes(overflowName), 'имя сверх лимита не должно попадать в метрики');
   // Кольцо доказательств не страдает: в /timeline имя алерта настоящее.
   const timeline = await (await fetch(`${base}/timeline`)).json();

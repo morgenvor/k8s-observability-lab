@@ -311,11 +311,11 @@
     {
       "id": 6,
       "title": "Алерты с запуска пода",
-      "description": "Отдельные алерты внутри принятых уведомлений с момента старта процесса (alertsink_alert_events_total). Счётчик, а не increase() по окну: у пары alertname/status серия появляется только при первом событии, и increase() вернул бы 0 при реальных приёмах. Имена сверх 200 разных за жизнь процесса схлопываются в alertname=\"other\" — так ограничена кардинальность метрики; настоящие имена остаются в логе и /timeline. Нули сразу после рестарта пода — норма: счётчики живут в процессе, события до первого скрейпа в них не попадают.",
+      "description": "Отдельные алерты внутри принятых уведомлений с момента старта процесса (alertsink_alert_events_total). Счётчик, а не increase() по окну: у пары alertname/status серия появляется только при первом событии, и increase() вернул бы 0 при реальных приёмах. Имена сверх 200 разных за жизнь процесса схлопываются в alertname=\"other\" — так ограничена кардинальность метрики; настоящие имена остаются в логе и /timeline. Нули сразу после рестарта пода — норма: счётчики живут в процессе, события до первого скрейпа в них не попадают. Колонки времени у счётчика нет намеренно: у него нет метки события, и в табличном instant-запросе Grafana подставляет в Time момент самого запроса — «сейчас», а не время алерта (видно на стенде 10.11). Настоящее время начала алерта — в соседней панели «Начало алерта по паре»; время приёма каждого уведомления — в поле ts журнала ниже, время алерта в исходном виде (received_at, starts_at/ends_at) — в /timeline.",
       "type": "table",
       "gridPos": {
         "h": 8,
-        "w": 16,
+        "w": 8,
         "x": 8,
         "y": 5
       },
@@ -348,6 +348,21 @@
           "expr": "sort_desc(sum by (alertname, status) (alertsink_alert_events_total))",
           "format": "table",
           "instant": true
+        }
+      ],
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "Time": true
+            },
+            "renameByName": {
+              "alertname": "Алерт",
+              "status": "Статус",
+              "Value": "Событий"
+            }
+          }
         }
       ]
     },
@@ -386,6 +401,84 @@
           "expr": "{namespace=\"demo\", app=\"alert-sink\"} |= \"notification_received\"",
           "queryType": "range",
           "maxLines": 200
+        }
+      ]
+    },
+    {
+      "id": 8,
+      "title": "Начало алерта по паре",
+      "description": "Когда начались алерты, дошедшие до sink (alertsink_alert_start_timestamp_seconds): значение — startsAt из payload Alertmanager, максимум по паре alertname/status, чтобы доставка вне порядка не откатывала время назад. Если startsAt не пришёл (обязательным полем он не считается), пишется время приёма — иначе «нет данных» не отличить от «алертов не было». В запросе секунды умножены на 1000: колонка форматируется как дата, а Grafana ждёт epoch в миллисекундах. Скрытая колонка Time здесь была бы моментом запроса, а не временем алерта. Кардинальность ограничена тем же лимитом имён, что у счётчика: имена сверх лимита попадают сюда как alertname=\"other\".",
+      "type": "table",
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 5
+      },
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto",
+            "cellOptions": {
+              "type": "auto"
+            }
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Value"
+            },
+            "properties": [
+              {
+                "id": "displayName",
+                "value": "Начало"
+              },
+              {
+                "id": "unit",
+                "value": "dateTimeAsIso"
+              },
+              {
+                "id": "decimals",
+                "value": 0
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "showHeader": true,
+        "cellHeight": "sm"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "max by (alertname, status) (alertsink_alert_start_timestamp_seconds) * 1000",
+          "format": "table",
+          "instant": true
+        }
+      ],
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "Time": true
+            },
+            "renameByName": {
+              "alertname": "Алерт",
+              "status": "Статус"
+            }
+          }
         }
       ]
     }
