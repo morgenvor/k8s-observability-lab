@@ -172,6 +172,12 @@ elif command -v python3 >/dev/null 2>&1; then
 else
   SKIPPED+=("валидация JSON дашбордов (нет ни jq, ни python3)")
 fi
+# Синтаксически валидный дашборд может ссылаться на несуществующую метрику, на чужой uid
+# datasource или на namespace, который Alloy не читает: панель тогда молчит («No data»),
+# и отличить поломку от тишины по экрану нельзя (scripts/checks/dashboards.py).
+if [ "${#DASH_FILES[@]}" -gt 0 ]; then
+  python3 "${PROJECT_ROOT}/scripts/checks/dashboards.py" "${PROJECT_ROOT}"
+fi
 
 # --- 4b. Оверлей деплоя: тег подставляется во ВСЕ образы приложений ---------
 # Ловит два класса ошибок: новый сервис с тегом :local (так было бы с alert-sink

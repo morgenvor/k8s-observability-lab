@@ -25,6 +25,18 @@ configMapGenerator:
         app.kubernetes.io/part-of: k8s-observability-lab
       annotations:
         grafana_folder: demo
+  # Журнал уведомлений (v1.1): приходы в alert-sink из Loki плюс метрики доставки.
+  # Читает то, что sink и так пишет в stdout и `/metrics`: нового кода и новых
+  # компонентов нет, `/timeline` остаётся контрактом для evidence дриллов.
+  - name: notifications
+    files:
+      - notifications.json
+    options:
+      labels:
+        grafana_dashboard: "1"
+        app.kubernetes.io/part-of: k8s-observability-lab
+      annotations:
+        grafana_folder: demo
 
 # Имя ConfigMap без хеша: так его ждёт sidecar и так проще искать глазами.
 generatorOptions:

@@ -27,7 +27,7 @@ flowchart LR
   api -->|"/metrics, клиентские метрики"| prometheus["Prometheus<br/>запись SLI и burn rate"]
   api -->|"stdout через Kubernetes API"| alloy["Alloy DaemonSet<br/>одна реплика на ноду"]
   alloy --> loki["Loki<br/>retention 72h"]
-  prometheus --> grafana["Grafana<br/>demo-red, slo-demo"]
+  prometheus --> grafana["Grafana<br/>demo-red, slo-demo, notifications"]
   loki --> grafana
   prometheus --> alertmanager["Alertmanager<br/>маршрут по severity"]
   loki -->|"ruler: DemoApi5xxFromLogs"| alertmanager
@@ -83,7 +83,8 @@ flowchart TD
 | demo-api, demo-load, alert-sink | node:22.23.4-alpine, тег = короткий SHA | `app/*/Dockerfile` |
 
 Своё: 27 алертов и 20 записывающих правил (47 правил) в 6 `PrometheusRule` (11 групп)
-плюс одно правило Loki ruler (`deploy/loki-rules`), два дашборда (`demo-red`, `slo-demo`),
+плюс одно правило Loki ruler (`deploy/loki-rules`), три дашборда (`demo-red`, `slo-demo`,
+`notifications`),
 четыре дрилла, офлайн-ворота `./scripts/check.sh` (их же запускает CI).
 
 ## Быстрый старт

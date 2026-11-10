@@ -27,7 +27,8 @@
   как `IP ноды  <host>`. Класс ingress — `traefik` (встроен в k3s); другой контроллер не
   нужен. Пока host не резолвится, Traefik отвечает 404 — это ожидаемо.
 - **Имена.** Namespace `demo`/`monitoring`, метки `app`, `service`, имена дашбордов
-  `demo-red`/`slo-demo` и datasource `uid: loki` продублированы в правилах, манифестах и запросах
+  `demo-red`/`slo-demo`/`notifications` и datasource `uid: loki` продублированы в правилах,
+  манифестах и запросах
   панелей. Переименование — это правка `rules/*.yaml`, `deploy/`, `deploy/dashboards/*.json`
   и `helm/values/kps.yaml` вместе; частично переименованный набор даёт молчащие алерты.
 - **Registry.** Его нет: образы собираются локально и импортируются в containerd **каждой**
@@ -135,6 +136,7 @@ containerd пишет на диск десятки секунд, API starve-ит
 | `ServiceMonitor/demo-api`, `demo-load` | `demo` | скрейп с меткой `release: monitoring` |
 | `ConfigMap/demo-red` | `monitoring` | дашборд Grafana (sidecar по метке `grafana_dashboard=1`) |
 | `ConfigMap/slo-demo` | `monitoring` | дашборд SLO/burn rate (фаза 3), та же метка |
+| `ConfigMap/notifications` | `monitoring` | дашборд «Уведомления» (v1.1): журнал `alert-sink` из Loki и метрики доставки, та же метка |
 | `PrometheusRule/demo-slo`, `demo-slo-alerts` | `monitoring` | записывающие правила SLI и 6 burn-rate алертов (фаза 3) |
 | `PrometheusRule/demo-infra`, `demo-meta` | `monitoring` | инфраструктурные и мета-алерты (фаза 3) |
 | `PrometheusRule/demo-logs-pipeline` | `monitoring` | семь правил пайплайна логов Loki/Alloy (2026-11-07) |
@@ -150,7 +152,7 @@ containerd пишет на диск десятки секунд, API starve-ит
 Применять корневой `kustomization.yaml` напрямую (`kubectl apply -k .`) нельзя: в нём
 заглушка `newTag: local`, поды уйдут в `ImagePullBackOff`. Штатный путь — `deploy.sh`.
 
-Откат (удаляет namespace `demo` целиком, дашборды `demo-red`/`slo-demo` и пять
+Откат (удаляет namespace `demo` целиком, дашборды `demo-red`/`slo-demo`/`notifications` и пять
 `PrometheusRule` в `monitoring` — то есть вместе с правилами уходит и SLO-оповещение;
 образы в containerd остаются):
 
@@ -251,6 +253,12 @@ kubectl -n monitoring get ingress
 - Дашборд `demo — SLI/SLO и burn rate` (uid `demo-slo`): остаток бюджета ошибок по двум
   SLO, текущий SLI за 3 дня, burn rate по окнам 5m/1h/30m/6h/3d, таблица по SLO,
   аннотация сработавших алертов на таймлайне.
+- Дашборд `Уведомления — маршрут и alert-sink` (uid `notifications`): «Молчание маршрута»
+  (сколько прошло с последнего уведомления; оранжевый порог 5,5 ч — тот же, что у
+  `AlertSinkHeartbeatMissing`), «Принято за окно», «Отказы sink» (не-ok исходы HTTP, включая
+  413), `up` цели, разбивка уведомлений по `severity` и таблица алертов по `alertname`/`status`.
+  Внизу — панель «Журнал уведомлений (Loki)»: те же события, что в `/timeline`, но из Loki,
+  поэтому журнал не пустеет после рестарта пода и хранится 72 ч.
 - Метрики приложения: `http_requests_total{method,route,status_class}`,
   `http_request_duration_seconds{method,route}` (бакеты с `0.3`), `http_inflight_requests`.
 - Метрики нагрузки: `load_requests_total{outcome="ok|error|timeout"}`,
@@ -549,6 +557,12 @@ kubectl -n demo port-forward svc/alert-sink 8080:8080
   `alertmanagerConfigMatcherStrategy` (обязан быть `None`, иначе оператор подмешивает
   `namespace="monitoring"` и алерты из `demo` не доходят) и лог Alertmanager. Офлайн это
   сторожит шаг 4e ворот: `type: None`, пустые селекторы и `apiVersion` конфига.
+- В браузере журнал открывается без port-forward — дашборд «Уведомления»
+  (`http://grafana.lab.internal/d/notifications`): панель «Журнал уведомлений (Loki)» читает
+  строки `notification_received` из stdout пода через Alloy → Loki, поэтому записи переживают
+  рестарт sink (Loki 72 ч против кольца ≤200 в памяти) и видны глазами, без `curl`. Labels
+  каждого алерта в лог не попадают (там `Имя:статус`) — за ними в UI Alertmanager или в
+  `/timeline`; drill-evidence по-прежнему берётся из JSON `/timeline`, а не из логов.
 - Метрики sink в Prometheus: `alertsink_notifications_total` и `up{job="alert-sink"}`
   (цель добавлена сверх плана фазы 4, иначе метрики живут только в поде).
 - `AlertmanagerConfig` — CRD версии **v1alpha1**: у operator 0.94.2 версии `v1` нет, и
@@ -581,6 +595,10 @@ Alertmanager не хранит (`/api/v2/alerts` показывает тольк
 - `alerts[]` — `name`, `status`, `labels`, `starts_at`, `ends_at`.
 
 Port-forward — из блока выше: `kubectl -n demo port-forward svc/alert-sink 8080:8080`.
+Тот же журнал виден в Grafana (дашборд «Уведомления», uid `notifications`, панель «Журнал
+уведомлений (Loki)»): она читает те же события из Loki, поэтому не требует port-forward и не
+пустеет после рестарта пода. Для evidence дриллов источником остаётся `/timeline`: в логе нет
+labels алерта и поля `truncated_alerts`.
 
 ```bash
 # весь журнал: одна строка на уведомление
@@ -768,8 +786,9 @@ kubectl -n demo get endpointslices -l kubernetes.io/service-name=demo-api \
 |---|---|---|
 | под в `ImagePullBackOff` | образ не импортирован на эту ноду | `./scripts/import-image.sh` (проверяет обе ноды) |
 | `up{job="demo-api"}` пусто | у ServiceMonitor нет метки `release: monitoring` или селектор не совпал с меткой Service | `kubectl -n demo get servicemonitor -o yaml`, сверить `selector.matchLabels` |
-| дашборда нет в Grafana | нет метки `grafana_dashboard=1` или sidecar не видит namespace | `kubectl -n monitoring get cm demo-red slo-demo --show-labels`, логи контейнера `grafana-sc-dashboard` |
+| дашборда нет в Grafana | нет метки `grafana_dashboard=1` или sidecar не видит namespace | `kubectl -n monitoring get cm demo-red slo-demo notifications --show-labels`, логи контейнера `grafana-sc-dashboard` |
 | нет серий `slo:*` | `PrometheusRule` без метки `release=monitoring`, группа падает или оператор не перезагрузил правила | `kubectl -n monitoring get prometheusrule \| grep demo-`, `curl … /api/v1/rules` и поле `lastError` группы |
+| панель «Журнал уведомлений» пуста, а «Принято за окно» растёт | строки не доехали до Loki (Alloy, `stage.drop`, retention) — sink тут не при чём, `/timeline` в это время полон | `kubectl -n monitoring logs ds/alloy -c alloy --tail=20`, запрос `{namespace="demo", app="alert-sink"}` в Explore |
 | в `/timeline` пусто | маршрут не подхвачен: `AlertmanagerConfig` не создан или не в `monitoring`, `matcherStrategy` не `None`, sink в `CrashLoop` | `kubectl -n monitoring get alertmanagerconfig`, сгенерированный конфиг (шаг 4), `kubectl -n demo logs deploy/alert-sink` |
 | `demo-load` считает `outcome="error"` | toxiproxy недоступен или прокси выключен | `kubectl -n demo port-forward svc/toxiproxy 8474:8474`, затем `GET /proxies` |
 | под demo-api бесконечно рестартует | падает проба или не хватает лимитов | `kubectl -n demo describe pod`, `kubectl -n demo logs <pod> --previous` |
