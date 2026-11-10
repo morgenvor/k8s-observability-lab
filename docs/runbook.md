@@ -145,7 +145,7 @@ containerd пишет на диск десятки секунд, API starve-ит
 | `ConfigMap/notifications` | `monitoring` | дашборд «Уведомления» (v1.1): журнал `alert-sink` из Loki и метрики доставки, та же метка |
 | `PrometheusRule/demo-slo`, `demo-slo-alerts` | `monitoring` | записывающие правила SLI и 6 burn-rate алертов (фаза 3) |
 | `PrometheusRule/demo-infra`, `demo-meta` | `monitoring` | инфраструктурные и мета-алерты (фаза 3) |
-| `PrometheusRule/demo-logs-pipeline` | `monitoring` | семь правил пайплайна логов Loki/Alloy (2026-11-07) |
+| `PrometheusRule/demo-logs-pipeline` | `monitoring` | десять правил пайплайна логов Loki/Alloy и сторожей правила ruler (2026-11-07, дополнено 2026-11-10) |
 
 Правка `deploy/base/toxiproxy.json` подхватывается сама: конфиг собирается
 `configMapGenerator`, хеш попадает в имя ConfigMap и в pod template, поэтому
@@ -678,7 +678,7 @@ Catch-all — страховка от нового или отсутствующ
 | «Дашборд» | `dashboard_url` | `demo-slo` / `demo-red` |
 | «Логи: окно инцидента (±15 мин)» | `logs_url` + `time`/`time.window` | панель логов `demo-red` вокруг срабатывания |
 | «Логи: что сейчас» | `logs_url` + `from`/`to=now` | то же от срабатывания до момента клика |
-| Source / Alertmanager | `GeneratorURL` / `ExternalURL` | выражение в Prometheus и сам алерт в UI |
+| Source / Alertmanager | `GeneratorURL` / `ExternalURL` | выражение в Prometheus и сам алерт в UI; Source — на каждый алерт группы, «Alertmanager» — **один раз на письмо** (вне цикла по алертам, иначе дубль по их числу) |
 | «Сработал: … MSK (… UTC)» | `startsAt` | время срабатывания (`for` уже истёк) |
 
 Почему окно именно `time` + `time.window`: арифметики в шаблонах Alertmanager 0.34.1 нет
@@ -873,8 +873,8 @@ kubectl -n demo get endpointslices -l kubernetes.io/service-name=demo-api \
 |---|---|---|---|
 | `page` | наш проект (`rules/demo-slo-alerts.yaml`, `rules/meta.yaml`) | пользователь страдает или вот-вот начнёт: горит бюджет ошибок/латентности, сторожа правил молчат | e-mail |
 | `critical` | чарт kube-prometheus-stack | отказ компонента стека (например, `AlertmanagerFailedReload`) | e-mail |
-| `ticket` | наш проект (`rules/demo-slo-alerts.yaml`, `rules/infra.yaml`, `rules/pipeline.yaml`) | разберут в рабочее время: медленный burn, инфраструктура, пайплайн логов | `alert-sink` (`/timeline`) |
-| `info` | наш проект (`rules/pipeline.yaml`, `rules/meta.yaml`) | дефект мониторинга, а не отказ сервиса: телеметрия неполная, но пользователь жив | `alert-sink` |
+| `ticket` | наш проект (`rules/demo-slo-alerts.yaml`, `rules/meta.yaml`, `rules/infra.yaml`, `rules/pipeline.yaml`, `rules/notifications.yaml`) | разберут в рабочее время: медленный burn, инфраструктура, пайплайн логов | `alert-sink` (`/timeline`) |
+| `info` | никто: свои алерты — только `page`/`ticket` (чартовый `InfoInhibitor` глушит одиночный info в namespace, проверено 2026-11-09) | дефект мониторинга, а не отказ сервиса | `alert-sink` — ветка маршрута есть, своих `info` в правилах нет |
 | `warning` | чарт | ресурсы/состояние кластера, требует внимания, не срочно | `alert-sink` |
 | `none` | чарт (`Watchdog`) | «доставка работает»: всегда firing | `alert-sink` |
 

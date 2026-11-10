@@ -62,7 +62,7 @@ flowchart TD
 и вид письма — глазами владельца; это записано в `docs/verification.md`.
 
 Почему ветка `email` стоит рядом с явным catch-all: у наших правил `severity ∈
-{page, ticket, info}`, у правил чарта — `critical`/`warning`, у `Watchdog` — `none`.
+{page, ticket}`, у правил чарта — `critical`/`warning`, у `Watchdog` — `none`.
 Маршрут без явной ветки-страховки отправил бы несовпавший алерт в `null`-приёмник, и он
 исчез бы молча.
 
@@ -114,11 +114,11 @@ export KUBECONFIG=/путь/к/своему/kubeconfig   # или .secrets/kubec
 
 ## Скриншоты
 
-| Дашборд | Файл |
+| Что на кадре | Файл |
 |---|---|
-| `demo — RED и латентность` | `docs/images/demo-red.png` |
-| `demo — SLI/SLO и burn rate` | `docs/images/slo-demo.png` |
-| Письмо по `page`-алерту | `docs/images/alert-email.png` |
+| Дашборд `demo — RED и латентность` | `docs/images/demo-red.png` |
+| Дашборд `demo — SLI/SLO и burn rate` | `docs/images/slo-demo.png` |
+| Письмо по `page`-пробе (без `Source`: кадр снят с приёмочной пробы) | `docs/images/alert-email.png` |
 
 Кадры сняты 2026-11-10 сразу после дрилла `errors`: на `demo-red` виден всплеск доли ошибок
 и восстановление, на `slo-demo` — израсходованный бюджет и просадка латентности в

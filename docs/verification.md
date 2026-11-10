@@ -14,11 +14,24 @@
 
 ## Офлайн-ворота
 
+**2026-11-10, после правок по ревью фаз 7–9: `./scripts/check.sh --strict --images` — `OK`,
+exit 0, пропусков нет.** 28 шагов (`--images` добавляет `docker build`), собраны
+`alert-sink:check`, `demo-api:check`, `demo-load:check` — это и есть доказательство прогона
+`--images`, которого не осталось от фазы 7 (лог `.tmp/check-images.log` был позже перезаписан
+прогоном без флага; найдено ревью). Лог — `.tmp/check-images-2026-11-10.log` (вне git).
+Числа: 47 правил / 27 алертов / 11 групп, `runbook_url 28, dashboard_url 6, logs_url 2`,
+анкоров 35, `kustomize` 24 объекта (`Valid: 14`), `helmfile template` 134 (`Valid: 89`),
+дашборды 3 файла / 19 панелей / 8 самопроверок, скан адресов 10 — все
+`example.invalid`/`example.com`. Шаблон письма: `text` 821 символ, `html` **1347** (было 1284:
+добавился отдельный абзац со ссылкой на стенд вне цикла по алертам и унифицированная подпись),
+шаг проверяет четыре фикстуры, включая письмо из двух алертов.
+
 **2026-11-10, финальный прогон Phase 9 на дереве с правками документов (HEAD `8acbdb3` +
 README, `docs/publish.md`, этот файл): `./scripts/check.sh --strict` — `OK`, exit 0,
 пропусков нет.** 27 шагов верхнего уровня, ни один не ушёл в «пропущено»; логи прогонов —
 `.tmp/check-phase9-*.log` (вне git). Прогон повторён после последней правки документов, числа
-совпали. Числа: 6 `PrometheusRule`, 47 правил (27 алертов:
+совпали. *Этот прогон — до правок по ревью (шаблон письма тогда давал `html` 1284 символа);
+актуальный — выше.* Числа: 6 `PrometheusRule`, 47 правил (27 алертов:
 23 `ticket` + 4 `page`), 11 групп; `runbook_url 28, dashboard_url 6, logs_url 2`, анкоров в
 runbook 35, `page`-анкоров 4; `kustomize` 24 объекта (`Valid: 14`, `Skipped: 10`);
 `helmfile template` 134 объекта (`Valid: 89`, `Skipped: 45`); дашборды — 3 файла, 19 панелей,
@@ -208,7 +221,7 @@ rules` — `SUCCESS`. Чарты снова из локальных копий (
 | 2026-11-08 | маршрут по `severity` | сгенерированный конфиг Alertmanager, `/api/v2/alerts`, `/timeline` | дерево доехало: `severity=~"page|critical"` → `email` (`continue: true`), `ticket|info|warning|none` → `alert-sink`, catch-all → `alert-sink`; проба `page` получила получателей `email` + `alert-sink`, проба `ticket` — только `alert-sink` |
 | 2026-11-08 | доставка e-mail | `/metrics` Alertmanager (напрямую из пода), гейт `deploy.sh` | `alertmanager_notifications_total{integration="email"} = 1`, `failed_total{integration="email"}` (все причины) `= 0` — SMTP принял письмо; `alertmanager_config_last_reload_successful = 1` сразу после apply |
 | 2026-11-08 | egress до SMTP | `nc -z <smtp-host> 587` с рабочей машины и из пода Alertmanager | порт открыт в обоих местах; проверено до apply — закрытый egress делает ветку e-mail нерабочей при любом конфиге |
-| 2026-11-08 | вручение письма | скриншот из ящика (`docs/images/alert-email.png`) | письмо получено: в кадре тело уведомления по `page`-пробе, личных адресов нет; снял владелец |
+| 2026-11-08 | вручение письма | скриншот из ящика (`docs/images/alert-email.png`) | письмо получено: в кадре тело уведомления по `page`-пробе, личных адресов нет; снял владелец. Файл **заменён 2026-11-10** кадром нового шаблона (строка ниже) — здесь описан кадр от 08.11 |
 | 2026-11-08 | доставка в приёмник | `/timeline`, `alertsink_*` | 4 уведомления: 2 × `Watchdog` (`none`), `EmailProbePage` (`page`, пришёл через catch-all), `EmailProbeTicket` (`ticket`) |
 | 2026-11-08 | Loki ruler: загрузка правила | `helmfile apply -l name=loki` (ревизия 4), `/prometheus/api/v1/rules` Loki (порт 3100) | группа `demo-api-logs`, файл `demo-api-5xx.yaml`, `interval: 60`, правило `DemoApi5xxFromLogs` `health: ok`, метки `severity=ticket`, `service=demo-api`; рестарт пода Loki прошёл без ошибок старта |
 | 2026-11-08 | Loki ruler: оценка и путь до Alertmanager | `/metrics` Loki, `/config` Loki | `loki_prometheus_rule_evaluations_total{rule_group="…;demo-api-logs"} = 2`, `…_failures_total = 0`; `ruler.alertmanager_url` = Service Alertmanager, `enable_api: true`, `storage.local.directory: /etc/loki/rules`, `rule_path: /tmp/loki-rules`; `loki_prometheus_notifications_alertmanagers_discovered{alertmanager="…/api/v2/alerts"} = 1`, `sent_total = 0` (гореть нечему) |
