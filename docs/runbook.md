@@ -559,7 +559,8 @@ kubectl -n demo port-forward svc/alert-sink 8080:8080
 #                                    truncated_alerts, alerts}; поля и выборки —
 #                                    подраздел «Чтение /timeline» ниже
 #   http://127.0.0.1:8080/metrics  — alertsink_notifications_total{status,severity},
-#                                    alertsink_alert_events_total{alertname,status}
+#                                    alertsink_alert_events_total{alertname,status},
+#                                    alertsink_alert_start_timestamp_seconds{alertname,status}
 ```
 
 - `Watchdog` (`vector(1)`, всегда firing) — эталон «маршрут работает»: он приходит в
@@ -575,6 +576,11 @@ kubectl -n demo port-forward svc/alert-sink 8080:8080
   `/timeline`; drill-evidence по-прежнему берётся из JSON `/timeline`, а не из логов.
 - Метрики sink в Prometheus: `alertsink_notifications_total` и `up{job="alert-sink"}`
   (цель добавлена сверх плана фазы 4, иначе метрики живут только в поде).
+- Время события в счётчиках sink нет, поэтому таблица «Алерты с запуска пода» не показывает
+  колонку `Time` (в instant-запросе Grafana подставляет туда момент запроса). Когда начался
+  алерт — панель «Начало алерта по паре» (`alertsink_alert_start_timestamp_seconds`, это
+  `startsAt` из payload); когда пришло уведомление — поле `ts` журнала и `received_at`
+  в `/timeline`.
 - `AlertmanagerConfig` — CRD версии **v1alpha1**: у operator 0.94.2 версии `v1` нет, и
   `apply` с ней падает на «no matches for kind AlertmanagerConfig». `kubeconform` схему
   CRD не проверяет, поэтому версию сторожит шаг 4e ворот; схема полей офлайн по-прежнему
