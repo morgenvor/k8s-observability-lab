@@ -320,8 +320,29 @@ func main() {
 	requireContains("html (resolved)", resolvedHTML, "RESOLVED", "Закрыт:",
 		`href="http://alertmanager.example.com"`)
 
+	// 4. Два алерта в одной группе (обычный случай: firing+resolved одного alertname или
+	//    чартовые алерты по нескольким узлам). Ссылка на стенд обязана быть одна на письмо:
+	//    внутри `range .Alerts` она размножалась бы по числу алертов — именно так было до
+	//    2026-11-10, и ассерт пункта 1 на одном алерте этого не видел.
+	multi := pageData()
+	multi.Alerts = append(multi.Alerts, pageData().Alerts[0])
+	multi.Alerts[1].Status = "resolved"
+	multiHTML := mustRender("html", htmlTpl, multi)
+	if n := strings.Count(multiHTML, `href="http://alertmanager.example.com"`); n != 1 {
+		fail("html (2 алерта): ссылок на Alertmanager %d, ожидалась ровно одна — ссылка внутри range .Alerts", n)
+	}
+	if n := strings.Count(multiHTML, "Alertmanager (силенсы, статус)"); n != 1 {
+		fail("html (2 алерта): подписей «Alertmanager (силенсы, статус)» %d, ожидалась одна", n)
+	}
+	requireContains("html (2 алерта)", multiHTML,
+		"FIRING [page]", "RESOLVED [page]", "Source (Prometheus)")
+	multiText := mustRender("text", textTpl, multi)
+	if n := strings.Count(multiText, "Alertmanager (силенсы, статус)"); n != 1 {
+		fail("text (2 алерта): подписей «Alertmanager (силенсы, статус)» %d, ожидалась одна", n)
+	}
+
 	fmt.Printf(
-		"шаблон письма: text %d символов, html %d символов; page/firing, critical, resolved — ok\n",
+		"шаблон письма: text %d символов, html %d символов; page/firing, critical, resolved, 2 алерта — ok\n",
 		len(pageText), len(pageHTML),
 	)
 }

@@ -123,6 +123,12 @@ spec:
           # образа уберут, ошибка шаблона сорвёт отправку целиком, а не только время.
           # Хост Grafana — плейсхолдер `grafana.lab.internal` (как в dashboard_url правил);
           # scripts/lib.sh заменяет его на GRAFANA_BASE_URL при рендере.
+          #
+          # Ссылка на сам стенд стоит ОДИН раз на письмо, вне `range .Alerts` (в обеих
+          # частях): в уведомлении бывает несколько алертов (firing+resolved одной группы,
+          # чартовые алерты по нескольким узлам), и внутри цикла она повторялась бы N раз —
+          # тот же дубль, что убрали 2026-11-10. Порядок проверяет шаг ворот «шаблон
+          # письма» на фикстуре из двух алертов (scripts/checks/email_template.go).
           text: |
             {{ range .Alerts }}{{ .Status | toUpper }} [{{ .Labels.severity }}] {{ .Labels.alertname }}
             {{ with .Labels.service }}Сервис: {{ . }}
@@ -160,7 +166,6 @@ spec:
             >Логи: что сейчас</a><br>
             {{ end }}{{ with .GeneratorURL }}<a href="{{ . }}">Source (Prometheus)</a><br>
             {{ end }}
-            <a href="{{ $.ExternalURL }}">Alertmanager</a>
             </p>
             <p style="margin: 0 0 8px; color: #555;">
             {{ if eq .Status "firing" }}Сработал{{ else }}Закрыт{{ end }}:
@@ -168,4 +173,5 @@ spec:
             ({{ .StartsAt.UTC | date "2006-01-02 15:04:05" }} UTC)
             </p>
             {{ end }}
+            <p style="margin: 0 0 8px;"><a href="{{ .ExternalURL }}">Alertmanager (силенсы, статус)</a></p>
             </div>
