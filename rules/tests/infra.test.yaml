@@ -1,7 +1,7 @@
 # Юнит-тесты инфраструктурных алертов (promtool test rules).
 #
-# Проверяются только правила проекта: KubePodOOMKilled, PVCNearlyFull и
-# NodeMemoryAvailableLow.
+# Проверяются только правила проекта: KubePodOOMKilled, PVCNearlyFull,
+# NodeMemoryAvailableLow и DemoTargetDownFast.
 # Остальная инфраструктура делегирована чарту kube-prometheus-stack (перечень —
 # в шапке rules/infra.yaml); тестировать здесь правила чарта смысла нет.
 #
@@ -119,3 +119,65 @@ tests:
                 retention; рост обычно даёт кардинальность метрик. Порог намеренно
                 без прогноза роста — «заполнилось и стабилизировалось» тоже опасно.
               runbook_url: "https://github.com/morgenvor/k8s-observability-lab/blob/main/docs/runbook.md#инфраструктурные-алерты"
+
+  # --- Быстрый сторож целей ------------------------------------------------
+  # Чартовый TargetDown ждёт 10 минут и считает долю in group, поэтому короткая
+  # потеря цели проверяется только этим правилом. Порог for: 2m — граница.
+  - name: "цель demo-api недоступна дольше 2 минут: DemoTargetDownFast горит"
+    interval: 1m
+    input_series:
+      - series: 'up{namespace="demo",job="demo-api",pod="demo-api-1",instance="10.0.0.10:8080"}'
+        values: '0x20'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: DemoTargetDownFast
+        exp_alerts:
+          - exp_labels:
+              severity: ticket
+              namespace: demo
+              job: demo-api
+              pod: demo-api-1
+              instance: 10.0.0.10:8080
+            exp_annotations:
+              summary: "Цель demo-api (demo-api-1) недоступна дольше 2 минут"
+              description: >-
+                Prometheus не может собрать /metrics цели дольше двух минут: под не
+                отвечает, сеть до него не работает или сломан ServiceMonitor. Чарт
+                замечает то же событие только через 10–15 минут (TargetDown по доле
+                в группе job, KubePodNotReady), поэтому при коротких инцидентах
+                уведомление приходит только отсюда. Проверь под и его логи, лимиты
+                (container_cpu_cfs_throttled_periods_total — заморозка по CFS даёт те
+                же симптомы, что сетевая недоступность) и пробы.
+              runbook_url: "https://github.com/morgenvor/k8s-observability-lab/blob/main/docs/runbook.md#цель-demo-недоступна-дольше-двух-минут"
+
+  # Границы с двух сторон: часовой блип короче for, цель вне namespace demo не наша.
+  - name: "цель моргнула на минуту: DemoTargetDownFast молчит"
+    interval: 1m
+    input_series:
+      - series: 'up{namespace="demo",job="demo-api",pod="demo-api-1",instance="10.0.0.10:8080"}'
+        values: '0 1x20'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: DemoTargetDownFast
+        exp_alerts: []
+
+  - name: "цель жива: DemoTargetDownFast молчит"
+    interval: 1m
+    input_series:
+      - series: 'up{namespace="demo",job="demo-api",pod="demo-api-1",instance="10.0.0.10:8080"}'
+        values: '1x20'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: DemoTargetDownFast
+        exp_alerts: []
+
+  # Селектор по namespace: up==0 вне demo не должен давать наш алерт.
+  - name: "цель вне namespace demo: DemoTargetDownFast молчит"
+    interval: 1m
+    input_series:
+      - series: 'up{namespace="other",job="demo-api",pod="demo-api-1",instance="10.0.0.11:8080"}'
+        values: '0x20'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: DemoTargetDownFast
+        exp_alerts: []

@@ -929,9 +929,71 @@ Fast требует реакции в минутах: сначала восст�
 `equal: [namespace]`), поэтому чартовый `CPUThrottlingHigh` до получателей не
 доходит вовсе, а свои сигналы мы помечаем `ticket`.
 
+### Диагностика: цена запроса генератора и профиль живого пода
+
+Два замера, которые отвечают на «почему генератор упирается в лимит», не перезапуская
+под.
+
+1. Цена запроса в миллисекундах CPU — из уже собираемых метрик, отдельный сборщик не
+   нужен (история есть за всё время retention):
+
+   ```
+   1000 * sum(rate(demo_process_cpu_seconds_total{job="demo-load"}[10m]))
+        / sum(rate(load_requests_total{job="demo-load"}[10m]))
+   ```
+
+   Норма для стенда — 1–3 мс. Рост до десятков мс при неизменных rps означает, что
+   процесс тратит CPU не на обслуживание запросов; тогда снимай профиль.
+
+2. Профиль живого процесса (V8 CPU profiler через инспектор, без рестарта):
+
+   ```
+   kubectl -n demo exec deploy/demo-load -- node -e 'process.kill(1,"SIGUSR1")'
+   kubectl -n demo exec deploy/demo-load -- node -e 'fetch("http://127.0.0.1:9229/json/list").then(r=>r.json()).then(j=>console.log(j[0].webSocketDebuggerUrl))'
+   ```
+
+   Дальше любым CDP-клиентом (Node 22 умеет `WebSocket` из коробки): `Profiler.enable`,
+   `Profiler.setSamplingInterval {interval:1000}`, `Profiler.start`, пауза,
+   `Profiler.stop`; агрегировать `nodes[].hitCount` по `callFrame.functionName`.
+   Инспектор слушает только `127.0.0.1` внутри пода, но **остаётся открытым до
+   рестарта контейнера** — после съёма профиля перезапусти под:
+   `kubectl -n demo rollout restart deploy/demo-load`.
+
+Что уже исключено замерами 09–10.11, чтобы не искать заново: сеть и сам сервис (с ноды
+тот же путь p50 3–5 мс), медленный апстрим (латентность 400 мс подняла цену запроса с
+1,9 до 2,2 мс, а не в разы), малый heap (`--max-old-space-size=48` дал 0,78 мс против
+1,04), GC в простое (профиль здорового процесса: 98,7 % сэмплов — `(idle)`), память
+(cgroup без `memory.pressure`, `memory.events` пуст). Значит профиль надо снимать
+**в момент деградации**: на здоровом процессе он пустой.
+
+### Цель demo недоступна дольше двух минут
+
+`DemoTargetDownFast` (`rules/infra.yaml`, `severity: ticket`) — Prometheus две минуты
+не может собрать `/metrics` одной из целей `demo-api`, `demo-load` или `alert-sink`.
+
+Зачем своё правило: чартовый `TargetDown` считает **долю** `up == 0` в группе `job` и
+ждёт 10 минут, `KubePodNotReady` — 15. Всё, что короче, остаётся в `pending` и до
+людей не доходит: 09.11 реплика `demo-api` две минуты не отвечала (контейнер был
+затроттлен на 100 % по CFS), и не пришло ни одного уведомления.
+
+Что смотреть и в каком порядке:
+
+1. `kubectl -n demo describe pod` и логи пода: не `Ready`, OOM, падение пробы.
+2. Троттлинг: `container_cpu_cfs_throttled_periods_total` /
+   `container_cpu_cfs_periods_total` по этому поду. Заморозка cgroup даёт ровно те же
+   симптомы (цель не отвечает), что и сеть, — лимиты лежат в `deploy/base/*.yaml`.
+3. `up` и `scrape_duration_seconds` по цели: если длительность скрейпа растёт до
+   таймаута, виноват под, а не сеть.
+4. Если цель пропала из Prometheus совсем (серии `up` нет), это другое событие:
+   `AlertSinkTargetMissing` и `SloDemoNoTraffic`.
+
+Почему `ticket`, а не `page`: при двух репликах `demo-api` потеря одной не лишает
+пользователя сервиса, а бюджет ошибок в этом случае тратится медленно, и о нём
+скажут SLO-алерты.
+
 ### Инфраструктурные алерты
 
-Три собственных правила (`rules/infra.yaml`), остальная инфраструктура — от чарта
+Четыре собственных правила (`rules/infra.yaml`), остальная инфраструктура — от чарта
 kube-prometheus-stack.
 
 - `KubePodOOMKilled` (ticket) — `kube_pod_container_status_last_terminated_reason
