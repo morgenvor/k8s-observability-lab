@@ -57,9 +57,9 @@ flowchart TD
 `example.invalid`: реальные значения подставляет окружение при деплое
 (`ALERT_EMAIL_TO`/`ALERT_EMAIL_FROM`/`SMTP_SMARTHOST`/`SMTP_USERNAME`), иначе письма не
 уходят. Доставка webhook подтверждена живьём (`/timeline`, метрика `alertsink_*`); по e-mail
-подтверждена отправка (`notifications_total{integration="email"}` растёт,
-`failed_total` = 0), а вручение письма в ящик проверяет владелец — это записано в
-`docs/verification.md`.
+подтверждены и отправка (`notifications_total{integration="email"}` растёт,
+`failed_total` = 0), и вручение (письмо снято из ящика 2026-11-10), а работа ссылок по клику
+и вид письма — глазами владельца; это записано в `docs/verification.md`.
 
 Почему ветка `email` стоит рядом с явным catch-all: у наших правил `severity ∈
 {page, ticket, info}`, у правил чарта — `critical`/`warning`, у `Watchdog` — `none`.
