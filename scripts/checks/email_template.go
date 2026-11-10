@@ -46,8 +46,8 @@ type Data struct {
 }
 
 var funcs = template.FuncMap{
-	"toUpper": strings.ToUpper,
-	"toLower": strings.ToLower,
+	"toUpper":   strings.ToUpper,
+	"toLower":   strings.ToLower,
 	"trimSpace": strings.TrimSpace,
 	"title": func(s string) string {
 		if s == "" {
@@ -177,7 +177,7 @@ func mustRender(part, tpl string, data Data) string {
 // selfCheck: рендерер обязан падать на заведомо битом шаблоне. Иначе «зелёный» шаг
 // ничего не доказывает: пустой или всегда-успешный рендер пропустил бы и toDuration,
 // которой нет в Alertmanager 0.34.1.
-func selfCheck() {
+func selfCheck(textTpl string) {
 	cases := []struct {
 		name string
 		tpl  string
@@ -193,21 +193,54 @@ func selfCheck() {
 			fail("самопроверка «%s»: html-рендер прошёл молча", tc.name)
 		}
 	}
+
+	// Ассерты тоже должны уметь падать: опечатка в имени аннотации (`logs_urll`) при
+	// missingkey=zero даёт пустую ссылку молча — ловится только проверкой токена.
+	brokenTpl := strings.ReplaceAll(textTpl, ".Annotations.logs_url", ".Annotations.logs_urll")
+	broken, err := renderText(brokenTpl, pageData())
+	if err != nil {
+		fail("самопроверка ассертов: мутация шаблона не рендерится: %v", err)
+	}
+	if err := checkContains("text (мутация)", broken, "time.window=1800000"); err == nil {
+		fail("самопроверка ассертов: потеря ссылки на логи прошла молча")
+	}
+	if err := checkContains("text (мутация)", broken, "Ранбук:"); err != nil {
+		fail("самопроверка ассертов: checkContains падает на присутствующем токене: %v", err)
+	}
+	if err := checkAbsent("text (мутация)", broken, "Ранбук:"); err == nil {
+		fail("самопроверка ассертов: checkAbsent пропустил присутствующий токен")
+	}
+}
+
+// checkContains/checkAbsent возвращают ошибку, чтобы их можно было проверить
+// самопроверкой: «ассерт, который никогда не падает» — это отсутствие ворот.
+func checkContains(part, body string, tokens ...string) error {
+	for _, token := range tokens {
+		if !strings.Contains(body, token) {
+			return fmt.Errorf("%s: нет %q — в письме не будет этого факта или ссылки", part, token)
+		}
+	}
+	return nil
+}
+
+func checkAbsent(part, body string, tokens ...string) error {
+	for _, token := range tokens {
+		if strings.Contains(body, token) {
+			return fmt.Errorf("%s: лишнее %q — шаблон показывает то, чего у алерта нет", part, token)
+		}
+	}
+	return nil
 }
 
 func requireContains(part, body string, tokens ...string) {
-	for _, token := range tokens {
-		if !strings.Contains(body, token) {
-			fail("%s: нет %q — в письме не будет этого факта или ссылки", part, token)
-		}
+	if err := checkContains(part, body, tokens...); err != nil {
+		fail("%v", err)
 	}
 }
 
 func requireAbsent(part, body string, tokens ...string) {
-	for _, token := range tokens {
-		if strings.Contains(body, token) {
-			fail("%s: лишнее %q — шаблон показывает то, чего у алерта нет", part, token)
-		}
+	if err := checkAbsent(part, body, tokens...); err != nil {
+		fail("%v", err)
 	}
 }
 
@@ -223,7 +256,7 @@ func main() {
 	const nowMS = "from=1794309993000&to=now"
 
 	// 1. Page-алерт: полный набор фактов и ссылок в обеих частях.
-	selfCheck()
+	selfCheck(textTpl)
 
 	pageText := mustRender("text", textTpl, pageData())
 	requireContains("text (page)", pageText,
@@ -269,9 +302,18 @@ func main() {
 	chartText := mustRender("text", textTpl, chartData())
 	requireAbsent("text (critical)", chartText, "Ранбук:", "Дашборд:", "viewPanel")
 
+	// 2a. Пустой GeneratorURL (алерты, созданные POST'ом в API): ссылки Source быть не
+	// должно — иначе в письме окажется href="" .
+	noSource := pageData()
+	noSource.Alerts[0].GeneratorURL = ""
+	noSourceHTML := mustRender("html", htmlTpl, noSource)
+	requireContains("html (без GeneratorURL)", noSourceHTML, "viewPanel=5")
+	requireAbsent("html (без GeneratorURL)", noSourceHTML, `href=""`, "Source (Prometheus)")
+
 	// 3. Resolved: та же вёрстка, но статус RESOLVED (ветка sendResolved).
 	resolvedHTML := mustRender("html", htmlTpl, resolvedData())
-	requireContains("html (resolved)", resolvedHTML, "RESOLVED", `href="http://alertmanager.example.com"`)
+	requireContains("html (resolved)", resolvedHTML, "RESOLVED", "Закрыт:",
+		`href="http://alertmanager.example.com"`)
 
 	fmt.Printf(
 		"шаблон письма: text %d символов, html %d символов; page/firing, critical, resolved — ok\n",

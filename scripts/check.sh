@@ -229,7 +229,8 @@ if ( export SMTP_SMARTHOST=smtp.example.invalid
 fi
 [ ! -e "${ROUTE_BAD}" ] || rm -f "${ROUTE_BAD}"
 python3 "${PROJECT_ROOT}/scripts/checks/route_tree.py" \
-  "${ROUTE_PLAIN}" "${ROUTE_FILLED}" "${ROUTE_QUOTED}" "${ROUTE_GRAFANA}"
+  "${ROUTE_PLAIN}" "${ROUTE_FILLED}" "${ROUTE_QUOTED}" "${ROUTE_GRAFANA}" \
+  http://grafana.example.com
 
 # --- 4c-2. Шаблон письма: рендер без кластера --------------------------------
 # Ошибка выполнения шаблона не портит письмо, а отменяет уведомление целиком
@@ -240,6 +241,10 @@ step "шаблон письма: рендер без кластера"
 if command -v go >/dev/null 2>&1; then
   python3 "${PROJECT_ROOT}/scripts/checks/email_templates.py" \
     "${ROUTE_PLAIN}" "${PROJECT_ROOT}/.tmp/rendered"
+  # go в .tools не пинован (остаточный вопрос в CHANGELOG): в CI это предустановленный
+  # Go раннера, поэтому шаг проверяется и там; без go ворота честно пропускают шаг.
+  unformatted="$(gofmt -l "${PROJECT_ROOT}/scripts/checks/email_template.go")"
+  [ -z "${unformatted}" ] || die "gofmt: не отформатирован ${unformatted}"
   go run "${PROJECT_ROOT}/scripts/checks/email_template.go" "${PROJECT_ROOT}/.tmp/rendered"
 else
   SKIPPED+=("шаблон письма: рендер (нет go)")

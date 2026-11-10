@@ -134,8 +134,9 @@ spec:
             {{ .Annotations.logs_url }}&time={{ .StartsAt.UnixMilli }}&time.window=1800000
             Логи, что сейчас:
             {{ .Annotations.logs_url }}&from={{ .StartsAt.UnixMilli }}&to=now
-            {{ end }}Сработал: {{ .StartsAt | tz "Europe/Moscow" | date "02.01.2006 15:04:05 MST" }}
-            ({{ .StartsAt | date "2006-01-02 15:04:05" }} UTC)
+            {{ end }}{{ if eq .Status "firing" }}Сработал{{ else }}Закрыт{{ end }}:
+            {{ .StartsAt | tz "Europe/Moscow" | date "02.01.2006 15:04:05 MST" }}
+            ({{ .StartsAt.UTC | date "2006-01-02 15:04:05" }} UTC)
             {{ end }}Стенд: {{ .ExternalURL }}
           html: |
             <div style="font-family: -apple-system, Segoe UI, Arial, sans-serif; font-size: 14px;">
@@ -157,12 +158,14 @@ spec:
             >Логи: окно инцидента (±15 мин)</a><br>
             <a href="{{ .Annotations.logs_url }}&amp;from={{ .StartsAt.UnixMilli }}&amp;to=now"
             >Логи: что сейчас</a><br>
-            {{ end }}<a href="{{ .GeneratorURL }}">Source (Prometheus)</a><br>
+            {{ end }}{{ with .GeneratorURL }}<a href="{{ . }}">Source (Prometheus)</a><br>
+            {{ end }}
             <a href="{{ $.ExternalURL }}">Alertmanager</a>
             </p>
             <p style="margin: 0 0 8px; color: #555;">
-            Сработал: {{ .StartsAt | tz "Europe/Moscow" | date "02.01.2006 15:04:05 MST" }}
-            ({{ .StartsAt | date "2006-01-02 15:04:05" }} UTC)
+            {{ if eq .Status "firing" }}Сработал{{ else }}Закрыт{{ end }}:
+            {{ .StartsAt | tz "Europe/Moscow" | date "02.01.2006 15:04:05 MST" }}
+            ({{ .StartsAt.UTC | date "2006-01-02 15:04:05" }} UTC)
             </p>
             {{ end }}
             <p style="margin: 0; color: #888; font-size: 12px;">Стенд: {{ .ExternalURL }}</p>

@@ -8,11 +8,13 @@ kubeconform не знает схемы AlertmanagerConfig (`--ignore-missing-sch
 «всё хорошо». Патч адресов проверяется тремя рендерами: без env (плейсхолдеры),
 с env (значения подставлены) и со значением с пробелом/запятой (экранирование).
 
-Использование: route_tree.py <render-plain> <render-filled> <render-quoted> [<render-grafana>]
+Использование: route_tree.py <render-plain> <render-filled> <render-quoted> \
+    <render-grafana> <ожидаемый GRAFANA_BASE_URL>
 
 Четвёртый рендер — с GRAFANA_BASE_URL: хост в ссылках письма и в аннотациях
 dashboard_url/logs_url обязан замениться целиком, иначе письмо ведёт на новый хост,
-а правила — на лабораторный.
+а правила — на лабораторный. Первый рендер (без env) обязан сохранить плейсхолдер:
+иначе подстановка работает всегда и переменная ничего не значит.
 """
 
 import sys
@@ -47,45 +49,78 @@ def matcher(route, where):
 GRAFANA_PLACEHOLDER = "http://grafana.lab.internal"
 
 
-def check_grafana_host(path):
-    """GRAFANA_BASE_URL заменяет хост Grafana во всём рендере, а не только в письме."""
-    docs = load_docs(path)
-    base = None
+def grafana_urls(docs):
+    """Все ссылки на Grafana из аннотаций правил плюс сам рендер для проверки текста."""
+    urls = []
     for doc in docs:
-        annotations = []
-        if doc.get("kind") == "PrometheusRule":
-            for group in (doc.get("spec") or {}).get("groups") or []:
-                for rule in group.get("rules") or []:
-                    annotations.append(rule.get("annotations") or {})
-        elif doc.get("kind") == "AlertmanagerConfig":
-            for receiver in (doc.get("spec") or {}).get("receivers") or []:
-                for config in receiver.get("emailConfigs") or []:
-                    for field in ("text", "html"):
-                        body = config.get(field) or ""
-                        if GRAFANA_PLACEHOLDER in body:
-                            fail(f"рендер с GRAFANA_BASE_URL: в emailConfigs[0].{field} остался плейсхолдер")
-        for item in annotations:
-            for name in ("dashboard_url", "logs_url"):
-                url = item.get(name)
-                if not url:
-                    continue
-                if not url.startswith("http"):
-                    fail(f"аннотация {name}={url!r} не абсолютная")
-                base = url.split("/d/")[0]
-    if base is None:
+        if doc.get("kind") != "PrometheusRule":
+            continue
+        for group in (doc.get("spec") or {}).get("groups") or []:
+            for rule in group.get("rules") or []:
+                annotations = rule.get("annotations") or {}
+                for name in ("dashboard_url", "logs_url"):
+                    url = annotations.get(name)
+                    if url:
+                        urls.append((rule.get("alert"), name, url))
+    return urls
+
+
+def check_grafana_host(path, expected_base):
+    """GRAFANA_BASE_URL заменяет хост Grafana во всём рендере, а не только в письме.
+
+    Проверяются КАЖДАЯ ссылка (а не последняя, как было до ревью 2026-11-10) и весь текст
+    рендера: забытая аннотация иначе осталась бы на лабораторном хосте, и письмо вело бы
+    в две разные Grafana.
+    """
+    with open(path, encoding="utf-8") as handle:
+        raw = handle.read()
+    if GRAFANA_PLACEHOLDER in raw:
+        fail(f"рендер с GRAFANA_BASE_URL={expected_base}: в файле остался плейсхолдер {GRAFANA_PLACEHOLDER}")
+
+    docs = load_docs(path)
+    urls = grafana_urls(docs)
+    if not urls:
         fail("рендер с GRAFANA_BASE_URL: ни одной ссылки на Grafana — проверять нечего")
-    if base == GRAFANA_PLACEHOLDER:
+    for alert, name, url in urls:
+        if not url.startswith(expected_base + "/"):
+            fail(
+                f"{alert}: {name}={url!r} не ведёт на {expected_base} —"
+                " подстановка GRAFANA_BASE_URL задела не все ссылки"
+            )
+    # Письмо собирает ссылки из аннотаций, поэтому хост в тексте шаблона проверяется
+    # отдельно: так поймается и захардкоженный лабораторный хост прямо в шаблоне.
+    spec = route_spec(path)
+    email = ((spec.get("receivers") or [None, None])[1] or {}).get("emailConfigs") or [{}]
+    for field in ("text", "html"):
+        body = email[0].get(field) or ""
+        if GRAFANA_PLACEHOLDER in body:
+            fail(f"рендер с GRAFANA_BASE_URL: в emailConfigs[0].{field} остался плейсхолдер")
+
+
+def check_placeholder_kept(path):
+    """Без env плейсхолдер обязан остаться в аннотациях правил.
+
+    Шаблон письма хост не хардкодит (ссылки собираются из аннотаций), поэтому проверяется
+    именно источник: если подстановка однажды станет безусловной, все ссылки молча уедут
+    на лабораторный хост, и GRAFANA_BASE_URL перестанет что-либо значить.
+    """
+    urls = grafana_urls(load_docs(path))
+    if not urls:
+        fail("базовый рендер: ни одной ссылки на Grafana — проверять нечего")
+    kept = [url for _, _, url in urls if url.startswith(GRAFANA_PLACEHOLDER + "/")]
+    if len(kept) != len(urls):
+        stray = [url for _, _, url in urls if not url.startswith(GRAFANA_PLACEHOLDER + "/")]
         fail(
-            "рендер с GRAFANA_BASE_URL: аннотации dashboard_url/logs_url остались на "
-            f"плейсхолдере {GRAFANA_PLACEHOLDER}"
+            "базовый рендер без GRAFANA_BASE_URL: часть аннотаций dashboard_url/logs_url "
+            f"не на плейсхолдере {GRAFANA_PLACEHOLDER}: {stray}"
         )
 
 
 def main():
-    if len(sys.argv) not in (4, 5):
+    if len(sys.argv) != 6:
         fail(
             "использование: route_tree.py <render-plain> <render-filled> <render-quoted>"
-            " [<render-grafana>]"
+            " <render-grafana> <ожидаемый GRAFANA_BASE_URL>"
         )
 
     spec = route_spec(sys.argv[1])
@@ -211,8 +246,10 @@ def main():
                 f"emailConfigs[0].{part} без полей {missing} — в письме не будет "
                 f"{', '.join(missing)}"
             )
-    if "<a\n" not in html and "<a href=" not in html:
+    if "<a" not in html or "href=" not in html:
         fail("emailConfigs[0].html без гиперссылок <a href=…> — ссылки останутся текстом")
+    if "<a" in text:
+        fail("emailConfigs[0].text содержит html-теги — plain-часть должна быть текстом")
     # Арифметики в шаблонах Alertmanager 0.34.1 нет: `toDuration` не определена, и шаблон
     # с ней падает на рендере, то есть письмо не уходит вовсе (проверено на пине).
     # Окно считается через time/time.window Grafana, а не вычитанием `for` из startsAt.
@@ -249,8 +286,8 @@ def main():
     expected_from = "Alert Manager <alertmanager@example.invalid>, ops"
     if quoted.get("from") != expected_from:
         fail(f"адрес с пробелом и запятой отрендерился как {quoted.get('from')!r} — экранирование сломано")
-    if len(sys.argv) == 5:
-        check_grafana_host(sys.argv[4])
+    check_placeholder_kept(sys.argv[1])
+    check_grafana_host(sys.argv[4], sys.argv[5])
 
     print("ассерты маршрута уведомлений и подстановки адресов: ok")
 

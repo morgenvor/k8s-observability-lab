@@ -125,6 +125,13 @@ def main():
                         )
                     checked["runbook"] += 1
                 logs = annotations.get("logs_url")
+                if logs and (rule.get("labels") or {}).get("severity") != "page":
+                    # Ссылка на демо-панель имеет смысл только у наших page-алертов: у
+                    # чартового critical она увела бы человека в чужой namespace.
+                    errors.append(
+                        f"{where}: logs_url у severity != page — ссылка на демо-логи"
+                        " допустима только у своих page-алертов"
+                    )
                 if logs:
                     if not logs.startswith(LOGS_DASHBOARD):
                         errors.append(
