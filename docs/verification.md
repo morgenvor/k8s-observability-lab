@@ -166,6 +166,13 @@ rules` — `SUCCESS`. Чарты снова из локальных копий (
 состояние SLI до/во время/после (`availability_ratio_5m_*`, `latency_ratio_5m_*`) и теги
 образов, на которых шёл дрилл.
 
+**Повтор `errors` 2026-11-10 (приёмка v1.1): `passed`**, `evidence/2026-11-10-errors.json`,
+8 утверждений, реакция 519 с, восстановление 268 с. Отличие от прогона 2026-11-05 —
+предмет проверки: в этот раз смотрели `starts_at` уведомления (`14:35:22Z` при инъекции в
+`14:26:53Z`, то есть FiredAt, а не начало отказа) и оба письма — `firing` и `resolved`.
+Правило `DemoApi5xxFromLogs` при этом молчало, как и предсказано планом: `reset_peer` рвёт
+соединение до приложения, 5xx в логах не появляется.
+
 ## Живые проверки стенда
 
 | Дата | Что проверяли | Чем | Результат |
@@ -202,57 +209,58 @@ rules` — `SUCCESS`. Чарты снова из локальных копий (
 | 2026-11-10 | deep link из письма и аутентификация UI | `curl -o /dev/null -w '%{redirect_url}'` | `302 → /login?redirectTo=%2Fd%2Fdemo-red%3FviewPanel%3D5%26time%3D…` — после входа человек попадает на нужный вид; Grafana требует логин (`/api/dashboards/uid/demo-red` → 401), Prometheus и Alertmanager — без аутентификации |
 | 2026-11-10 | шаблон письма в живом контуре | `kubectl apply -f rules/demo-slo-alerts.yaml -f rules/meta.yaml`; JSON6902-патч `emailConfigs[0].{text,html}` на живом `AlertmanagerConfig` (адреса и Secret не тронуты); `POST /api/v2/alerts`; `/metrics` Alertmanager, `/timeline` sink | после apply правила отдают новые анкоры и `logs_url` (`/api/v1/rules`: `slodemoavailabilityburnfast`, `logs_url: да`), у meta-сторожей `logs_url` нет; `alertmanager_config_last_reload_successful = 1`, в сгенерированном конфиге шаблон есть (`grep` «Ранбук: пошаговая диагностика» = 1, `time.window=1800000` = 2); проба `EmailProbePage` (`page`) → `alertmanager_notifications_total{integration="email"} = 1`, `increase(failed_total{integration="email"}[10m]) = 0`, запись в `/timeline` `12:55:14Z` со `starts_at 12:55:02Z` (письмо ушло и в sink по `continue`); вид и вручение письма проверяет владелец |
 | 2026-11-10 | свои info-алерты → `ticket` в живом кластере | `kubectl apply -f rules/pipeline.yaml -f rules/meta.yaml` (+ `rules/notifications.yaml`), `/api/v1/rules`, `prometheus_rule_group_rules` | `LokiNotIngesting` и `SloDemoNoTraffic` — `severity=ticket`, `health=ok`, `lastError` нет; `ALERTS` по ним пусто; своих `info` не осталось (23 `ticket`, 4 `page`, 27 алертов). Побочно: `PrometheusRule demo-alerting-path` в кластере **отсутствовал** (три heartbeat-правила были только в git) — применён, групп проекта стало 11 вместо 10 |
+| 2026-11-10 | ротация пароля SMTP | `kubectl -n monitoring get secret alertmanager-smtp -o jsonpath='{.metadata.managedFields}'`, `alertmanager_config_last_reload_success_timestamp_seconds` | до ротации в Secret была одна запись `kubectl-create` (2026-11-08) и конфиг перезагружался 12:54Z — то есть в кластере лежал **старый** пароль, хотя у провайдера он уже был сменён; после `create … --dry-run=client \| kubectl apply -f -` (владелец) появилась запись `kubectl-client-side-apply` 14:11:59Z, перезагрузка конфига 14:13:16Z, `last_reload_successful = 1` |
+| 2026-11-10 | маршрут и письмо (приёмка v1.1) | `POST /api/v2/alerts` через port-forward Alertmanager, `/metrics` Alertmanager, `/timeline` sink, `curl …/api/v2/status` | дерево в живом конфиге: `alertname=~"AlertSink.*"` → `email` (`continue`), `severity=~"page\|critical"` → `email` (`continue`), `severity=~"ticket\|info\|warning\|none"` → `alert-sink`, catch-all → `alert-sink`. Проба `page` (`AcceptanceProbePage`): `email` 2 → 3, `failed_total{integration="email"}` = 0 и `increase(…[15m])` = 0, `AlertmanagerFailedReload` не горит, запись в `/timeline` 14:26:22.979Z; проба `ticket` (`AcceptanceProbeTicket`) — запись в `/timeline` есть, счётчик `email` не изменился. **Найдено расхождение**: в живом `AlertmanagerConfig` отсутствовала ветка `AlertSink*` → `email` (3 маршрута вместо 4 в git) — применён JSON6902-патч, перезагрузка 14:42:13Z; проба `AlertSinkProbePhase83` (`severity=ticket`, имя под шаблон `AlertSink.*`) дала `email` 6 → 7 **и** запись в `/timeline` — сигнал о поломке пути доходит до человека |
+| 2026-11-10 | дрилл `errors` (приёмка v1.1) | `./drills/errors.sh` (toxiproxy `reset_peer`), `/timeline` sink, `evidence/2026-11-10-errors.json` | `result: passed`, 8 утверждений; доля ok упала до 0 (`ratio_5m` 1 → 0,43 → 0), `SloDemoAvailabilityBurnFast` (`page`) доставлен в 14:35:32Z при инъекции в 14:26:53Z — **`starts_at` = 14:35:22,127Z, то есть FiredAt, а не начало инъекции** (закрывает «подтверждено только кодом»); реакция 519 с (порог 900), после снятия токсина `resolved` в 14:40:02Z, восстановление 268 с (порог 600), `ratio_5m` вернулась к 1. Письма (счётчик `alertmanager_notifications_total{integration="email"}` по шагам): 4 → 5 на `firing` в 14:36Z и 5 → 6 на `resolved` в 14:40Z при `failed_total = 0` — ветка `sendResolved` у e-mail проверена живым алертом, а не пробой |
+| 2026-11-10 | сторож правила Loki ruler: `LokiRulerRulesMissing` | удалён ключ `demo-api-5xx.yaml` из ConfigMap `loki-rules` (JSON-patch), `/api/v1/rules`, `/timeline`, возврат `kubectl apply -k deploy/loki-rules` | серия `loki_prometheus_rule_evaluations_total{rule_group="…;demo-api-logs"}` пропала → `pending` → `firing` в 14:20:28Z (инъекция 14:07:30Z: сначала ~5 мин до исчезновения серии, затем `for: 10m`), запись в `/timeline` 14:20:38Z (`severity=ticket`), возврат ConfigMap — `resolved` в 14:22:28Z, доставка 14:22:38Z; серия вычислений вернулась (`count = 1`), `health: ok`. Второй сторож `LokiRulerEvaluationFailing` живьём **не проверялся** — только `promtool`-тест |
+| 2026-11-10 | `ticket` на новом severity: `SloDemoNoTraffic` | `kubectl -n demo scale deploy/demo-load --replicas=0`, `/api/v1/rules`, `/timeline`, возврат реплик | `pending` с 14:08:52Z, `firing` в 14:23:52Z (инъекция 14:07:37Z, `for: 15m` — сходится), доставка в `/timeline` 14:24:02Z, `resolved` после возврата реплик в 14:25:22Z, доставка 14:25:32Z; `email` 2 → 2 — в почту **не** ушло, как и должно для `ticket`; ни один `page` за окно не загорелся (`ALERTS{alertstate="firing",severity="page"}` за час — пусто), трафик после возврата 1,43 rps |
+| 2026-11-10 | heartbeat пути: опорные серии | `/api/v1/rules`, `up{job="alert-sink"}`, `alertsink_last_notification_timestamp_seconds` | три правила группы `demo-alerting-path.heartbeat` — `health: ok`; `up{job="alert-sink"} = 1`; `alertsink_last_notification_timestamp_seconds` = 14:42:57Z (> 0, обновился после доставок). **`firing` самих heartbeat-правил не проверялся**: нужна 5,5-часовая тишина маршрута — логика покрыта `promtool`, живьём проверены только опорные серии |
+| 2026-11-10 | доступ к UI и ссылки | `curl -H 'Host: …'`, `curl -o /dev/null -w '%{redirect_url}'`, `api.github.com/repos/…` | Prometheus 302 → `/query`, Alertmanager 200, Grafana `/login` 200; deep link `/d/notifications` → 302 на `/login?redirectTo=%2Fd%2Fnotifications…`; `HEAD` на Prometheus/Alertmanager даёт 405 — проверять надо `GET`. **Репозиторий на GitHub отдаёт 404 без авторизации** — ссылки `runbook_url` из писем у постороннего пока не открываются: публикация репозитория — действие владельца (`docs/publish.md`) |
+| 2026-11-10 | покой контура после приёмки | `ALERTS`, `sum(increase(alertmanager_notifications_failed_total[1h]))`, `loki_prometheus_rule_evaluations_total` | в `firing` только `Watchdog` (`severity: none`), отказов отправки — 0, серии сторожей вернулись; шум стенда отдельно: в 13:43:37–13:43:42 kubelet перезапустил контейнеры `alert-sink`/`demo-api`/`demo-load` на одной ноде по liveness-пробе (`context deadline exceeded`, `exitCode 137`), OOM нет (пик 34 МиБ из 64 МиБ), `node_load1` в те же минуты 1,27 — совпало с прогоном офлайн-ворот на той же физической машине |
 
 Как проверить это повторно (временное правило по реальному трафику, без выдуманных строк
 и без правки кода) — раздел «Правила Loki ruler» в `docs/runbook.md`.
 
 ## Ещё не подтверждено живьём
 
-- письмо с новым `text`/`html` **отправлено** 2026-11-10 пробой `EmailProbePage`: SMTP принял
-  (`failed_total = 0`), запись пришла в `/timeline`. Вручение и внешний вид проверяет
-  владелец; живой page-алерт от SLO (с `$value` в `description` и `GeneratorURL`) ещё
-  не приходил — только проба через API;
-- `startsAt = FiredAt` («после `for`») подтверждено по коду Prometheus
-  (`rules.SendAlerts`), но не живым алертом: сейчас firing только `Watchdog` без `for`.
-  Подтверждение — первый дрилл: сравнить `starts_at` в `/timeline` с временем инъекции;
-- клик по `time`/`time.window` и по процент-кодированному кириллическому анкору глазами не
-  проверялся (нужен вход в Grafana и чтение письма).
+Состояние после приёмки v1.1 (2026-11-10). Закрыто в этот день: живой `page`-алерт от SLO,
+`startsAt = FiredAt`, `resolved`-ветка e-mail, доставка `ticket` на новом severity, сторож
+`LokiRulerRulesMissing`, маршрут `AlertSink.*` → `email` (см. строки таблицы выше).
 
-Список ведётся явно, чтобы «написано в коде» не путалось с «проверено на стенде»:
-
-- вручение письма подтверждено скриншотом владельца (`docs/images/alert-email.png`), но
-  не метрикой: «письмо ушло» и «письмо прочитано» — разные события, и SMTP-сервер о втором
-  не сообщает;
-- `resolved`-ветка **e-mail**/`sendResolved`: проба через `/api/v2/alerts` без `endsAt`
-  осталась `active` (снять её нельзя, `DELETE` отдаёт 405; статус пересчитывается только
-  при обновлении алерта или сборке мусора), поэтому закрытие письмом этой пробой не
-  проверено — его покажет ближайший дрилл. У webhook-приёмника `resolved` проверен
-  2026-11-09 на пробном правиле ruler (см. таблицу выше); у e-mail — нет;
-- сторожа правила ruler (`LokiRulerRulesMissing`, `LokiRulerEvaluationFailing`,
-  `rules/pipeline.yaml`): логика покрыта `promtool test rules` 2026-11-09, но на стенде
-  они не горели. Живая проверка — инъекция (убрать ключ `demo-api-5xx.yaml` из
-  ConfigMap `loki-rules` → `LokiRulerRulesMissing`; испортить выражение →
-  `LokiRulerEvaluationFailing`) с возвратом состояния по `kubectl apply -k
-  deploy/loki-rules`. Подтверждено живьём только существование опорных метрик
-  (`loki_prometheus_rule_evaluations_total`, `…_failures_total` — строка 2026-11-08);
-- перевод `LokiNotIngesting` и `SloDemoNoTraffic` из `info` в `ticket` (2026-11-10):
-  причина — проверенное глушение одиночного info ингибитором `InfoInhibitor`. В кластере
-  правила уже с `severity=ticket` (`health=ok`, см. строку таблицы), но доставка
-  `ticket` в `alert-sink` на новом severity не проверялась — нужна инъекция: остановить
-  `demo-load` или прекратить запись логов;
-- отрисовка дашборда «Уведомления» глазами: Grafana API закрыт логином (`401`), поэтому
-  проверены запросы панелей напрямую в Loki/Prometheus, а вид панелей подтверждает владелец;
-- heartbeat пути уведомлений (правила `AlertSinkHeartbeatMissing`, `AlertSinkNeverReceived`);
-- срабатывание `DemoApi5xxFromLogs` именно на **реальном 5xx**. Путь «правило →
+- **Вручение и вид письма** — на владельце: письмо `page`-алерта ушло, SMTP принял
+  (`failed_total = 0`), но «письмо ушло» и «письмо прочитано» — разные события, и SMTP-сервер
+  о втором не сообщает. Проверить нужно глазами: ссылки ранбук/дашборд/логи, `viewPanel=5`,
+  `time`+`time.window` (окно инцидента), MSK и UTC в теле, клик по кириллическому анкору,
+  папка «Спам» — тоже канал. Скриншот `docs/images/alert-email.png` снят 2026-11-08 с
+  упрощённым письмом (без ссылок и окна) — нужен новый кадр;
+- **`heartbeat` пути уведомлений** (`AlertSinkHeartbeatMissing`, `AlertSinkNeverReceived`,
+  `AlertSinkTargetMissing`): логика покрыта `promtool`, живьём проверены правило-состав,
+  `health: ok`, `up{job="alert-sink"} = 1` и рост `alertsink_last_notification_timestamp_seconds`,
+  но `firing` самих правил не проверялся — для этого нужна 5,5-часовая тишина маршрута,
+  то есть порча контура на вечер. Так и записано: «опорные серии подтверждены, срабатывание — нет»;
+- **`LokiRulerEvaluationFailing`** (вычисление правила ruler падает): живьём не инъецировался —
+  нужен файл, который разбирается, но падает при вычислении; надёжного способа на стенде не
+  нашли (ошибку хранилища воспроизводить дороже, чем ценность проверки). Покрыт `promtool`
+  и разбором конфига в воротах. Первый сторож (`LokiRulerRulesMissing`) проверен живьём;
+- **срабатывание `DemoApi5xxFromLogs` именно на реальном 5xx.** Путь «правило →
   Alertmanager → sink» доказан 2026-11-09 пробным правилом на обычных логах, но ни одного
   настоящего 5xx от `demo-api` в лабе не возникает: единственный источник 5xx — `503`
   самопроверки `/ready` при дренаже, и он из выражения исключён (иначе правило горело бы
-  на каждом рестарте пода). Дрилл `errors` для этой проверки не годится: `reset_peer` на
-  toxiproxy рвёт соединение **до** приложения, и в логах остаются `status: 200` и
-  `request_aborted` (499) — ни то, ни другое под условие `status >= 500` не попадает.
-  Чтобы правило горело на настоящем 5xx, нужна инъекция 5xx в `demo-api` (отдельный
-  маршрут) и свой дрилл — это записано в «Идеи после v1.1»;
-- прогон workflow `ci` на GitHub (подтверждает владелец, ссылка на run — в CHANGELOG).
+  на каждом рестарте пода). Дрилл `errors` этого не изменил: `reset_peer` на toxiproxy рвёт
+  соединение **до** приложения, в логах остаются `status: 200` и `request_aborted` (499) —
+  ни то, ни другое под условие `status >= 500` не попадает (проверено 2026-11-10 ещё раз:
+  правило при живом дрилле молчало, как и предсказано). Чтобы правило горело на настоящем
+  5xx, нужна инъекция 5xx в `demo-api` (отдельный маршрут) и свой дрилл — это записано в
+  «Идеи после v1.1»;
+- **глазами**: вид дашборда «Уведомления», клик по `time`/`time.window` и по
+  процент-кодированному кириллическому анкору, вид письма целиком — нужен вход в Grafana и
+  чтение письма, это делает владелец;
+- **скриншоты** `docs/images/demo-red.png` и `slo-demo.png` отсутствуют (README на них
+  ссылается) и новый кадр письма — действие владельца;
+- **публикация**: `api.github.com/repos/…` отвечает 404 без авторизации — репозиторий пока
+  приватный, поэтому абсолютные `runbook_url` из писем у постороннего не открываются.
+  Публикация репозитория, тег `v1.1` и прогон `ci.yml` на GitHub — действия владельца
+  (`docs/publish.md`).
 
 Дополнительно известно и не проверяется: slow-burn алерт (1x / 3d) требует трёх суток
 непрерывных данных — его логика покрыта `promtool test rules`, живой прогон не планируется.

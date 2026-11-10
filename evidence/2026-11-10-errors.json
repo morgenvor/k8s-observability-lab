@@ -1,0 +1,118 @@
+{
+  "schema": "drill-evidence/v1",
+  "result": "passed",
+  "drill": "errors",
+  "cluster_version": "v1.37.1+k3s1",
+  "started_at": "2026-11-10T14:26:49Z",
+  "finished_at": "2026-11-10T14:40:45Z",
+  "assertions": [
+    {
+      "name": "availability_ratio_5m_baseline",
+      "expected": ">= 0.99",
+      "actual": "1",
+      "passed": true
+    },
+    {
+      "name": "availability_ratio_5m_early",
+      "expected": "<= 0.5",
+      "actual": "0.43267808192410545",
+      "passed": true
+    },
+    {
+      "name": "availability_ratio_5m_during_drill",
+      "expected": "<= 0.01",
+      "actual": "0",
+      "passed": true
+    },
+    {
+      "name": "reaction_seconds_positive",
+      "expected": "> 0",
+      "actual": "519",
+      "passed": true
+    },
+    {
+      "name": "reaction_seconds",
+      "expected": "<= 900",
+      "actual": "519",
+      "passed": true
+    },
+    {
+      "name": "recovery_seconds_positive",
+      "expected": "> 0",
+      "actual": "268",
+      "passed": true
+    },
+    {
+      "name": "recovery_seconds",
+      "expected": "<= 600",
+      "actual": "268",
+      "passed": true
+    },
+    {
+      "name": "availability_ratio_5m_after",
+      "expected": ">= 0.99",
+      "actual": "1",
+      "passed": true
+    }
+  ],
+  "timeline": [
+    {
+      "t": "2026-11-10T14:26:49Z",
+      "step": "start",
+      "detail": "дрилл errors начат"
+    },
+    {
+      "t": "2026-11-10T14:26:53Z",
+      "step": "preflight",
+      "detail": "кластер v1.37.1+k3s1, поды Ready, цели up (demo-api 2, demo-load 1, alert-sink 1), toxiproxy и /timeline отвечают"
+    },
+    {
+      "t": "2026-11-10T14:26:53Z",
+      "step": "baseline",
+      "detail": "исходная доступность клиента"
+    },
+    {
+      "t": "2026-11-10T14:26:53Z",
+      "step": "inject",
+      "detail": "toxiproxy: reset_peer на прокси demo-api (все соединения сбрасываются)"
+    },
+    {
+      "t": "2026-11-10T14:35:34Z",
+      "step": "alert",
+      "detail": "SloDemoAvailabilityBurnFast пришёл в alert-sink"
+    },
+    {
+      "t": "2026-11-10T14:35:34Z",
+      "step": "remove",
+      "detail": "снимаю токсин errors_drill"
+    },
+    {
+      "t": "2026-11-10T14:40:05Z",
+      "step": "resolved",
+      "detail": "SloDemoAvailabilityBurnFast закрылся в alert-sink"
+    },
+    {
+      "t": "2026-11-10T14:40:45Z",
+      "step": "done",
+      "detail": "трафик восстановился, токсин снят"
+    },
+    {
+      "t": "2026-11-10T14:40:45Z",
+      "step": "cleanup",
+      "detail": "инъекции сняты, порт-форварды закрыты"
+    }
+  ],
+  "alerts": [
+    {
+      "name": "SloDemoAvailabilityBurnFast",
+      "fired_at": "2026-11-10T14:35:32.162Z",
+      "resolved_at": "2026-11-10T14:40:02.201Z",
+      "source": "alert-sink"
+    }
+  ],
+  "images": {
+    "demo_api": "de1d9ba",
+    "demo_load": "de1d9ba",
+    "alert_sink": "de1d9ba"
+  }
+}
