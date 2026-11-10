@@ -147,6 +147,7 @@ rules` — `SUCCESS`. Чарты снова из локальных копий (
 | 2026-11-09 | Alloy: старые строки не доезжают до Loki | `rollout restart ds/alloy` (10:58:51Z), затем `kubectl logs -l app.kubernetes.io/name=loki --since=…` и `loki_process_dropped_lines_total` через Prometheus | после пересоздания подов (emptyDir новый, логи перечитаны с начала) в Loki **0** строк `entry too far behind` и в Alloy **0** ответов 400 за 20+ минут; фильтр отбросил **14 293** строки (13 639 + 654 по нодам) при пороге 1h, после первичного перечитывания счётчик не растёт. Замер с порогом 50m — 2026-11-09 после правки по ревью (см. строку ниже) |
 | 2026-11-09 | Alloy: повторный замер с порогом 50 минут | `helmfile apply -l name=alloy` (ревизия 6, hot-reload) + `rollout restart ds/alloy` в 10:58:51Z; через 10 минут — `kubectl logs` Loki и Alloy, `loki_process_dropped_lines_total{reason="too_old"}` в Prometheus | порог 50m даёт запас до окна приёма Loki (1 ч): за 10 минут и далее — **0** строк `entry too far behind`, **0** ответов 400; счётчик отброшенных строк вырос |
 | 2026-11-09 | `retentionSize` Prometheus: замер и правка | `/api/v1/status/tsdb`, `prometheus_tsdb_*`, `/api/v1/status/flags` через port-forward, `kubectl get pvc` | замер: `storage.tsdb.retention.time=3d`, `size` было `5GiB` (`retention_limit_bytes = 5 368 709 120`) при PVC **5Gi** — то есть 100 % тома, при том что считаются только блоки, а WAL (`127 006 710 B`) и `head_chunks_storage` (`12 582 809 B`) лежат сверху; 10 блоков = **673 MiB**, head-серий 106 786 при 221 174 чанках, итого ≈**806 MiB** (~16 % лимита). Сэмплы есть на 24, 48 и 90 ч назад, на 60–80 ч — нет (стенд был выключен); `kubelet_volume_stats_*` для этого PVC показывает ФС ноды (20,9 GB), а не квоту. Решение: `retentionSize` → **4GB** (≈80 % от 5Gi, рекомендация Prometheus), `helmfile apply -l name=monitoring` — ревизия 11; в CR `spec.retentionSize = 4GB` |
+| 2026-11-10 | свои info-алерты → `ticket` в живом кластере | `kubectl apply -f rules/pipeline.yaml -f rules/meta.yaml` (+ `rules/notifications.yaml`), `/api/v1/rules`, `prometheus_rule_group_rules` | `LokiNotIngesting` и `SloDemoNoTraffic` — `severity=ticket`, `health=ok`, `lastError` нет; `ALERTS` по ним пусто; своих `info` не осталось (23 `ticket`, 4 `page`, 27 алертов). Побочно: `PrometheusRule demo-alerting-path` в кластере **отсутствовал** (три heartbeat-правила были только в git) — применён, групп проекта стало 11 вместо 10 |
 
 Как проверить это повторно (временное правило по реальному трафику, без выдуманных строк
 и без правки кода) — раздел «Правила Loki ruler» в `docs/runbook.md`.
@@ -171,9 +172,10 @@ rules` — `SUCCESS`. Чарты снова из локальных копий (
   deploy/loki-rules`. Подтверждено живьём только существование опорных метрик
   (`loki_prometheus_rule_evaluations_total`, `…_failures_total` — строка 2026-11-08);
 - перевод `LokiNotIngesting` и `SloDemoNoTraffic` из `info` в `ticket` (2026-11-10):
-  причина — проверенное глушение одиночного info ингибитором `InfoInhibitor`; доставка
-  на новом severity живьём не проверялась (нужна инъекция: остановить `demo-load` или
-  прекратить запись логов);
+  причина — проверенное глушение одиночного info ингибитором `InfoInhibitor`. В кластере
+  правила уже с `severity=ticket` (`health=ok`, см. строку таблицы), но доставка
+  `ticket` в `alert-sink` на новом severity не проверялась — нужна инъекция: остановить
+  `demo-load` или прекратить запись логов;
 - heartbeat пути уведомлений (правила `AlertSinkHeartbeatMissing`, `AlertSinkNeverReceived`);
 - срабатывание `DemoApi5xxFromLogs` именно на **реальном 5xx**. Путь «правило →
   Alertmanager → sink» доказан 2026-11-09 пробным правилом на обычных логах, но ни одного
