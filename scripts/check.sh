@@ -50,7 +50,9 @@ if command -v yamllint >/dev/null 2>&1; then
       \( -name '*.yaml' -o -name '*.yml' \) -print | sort
   )
   if [ "${#YAML_FILES[@]}" -gt 0 ]; then
-    yamllint -d '{extends: relaxed, rules: {line-length: {max: 120}}}' "${YAML_FILES[@]}"
+    # --strict: предупреждение (например, длинная строка) — это провал. Без него часть
+    # правил линтера фактически выключена, а «зелёный yamllint» ничего не значит.
+    yamllint --strict -d '{extends: relaxed, rules: {line-length: {max: 120}}}' "${YAML_FILES[@]}"
     printf 'проверено файлов: %d\n' "${#YAML_FILES[@]}"
   else
     SKIPPED+=("yamllint (в дереве нет .yaml/.yml)")
@@ -296,7 +298,15 @@ else
   SKIPPED+=("promtool test rules (rules/tests появятся в фазе 3)")
 fi
 
-# --- 5b. Поведение дриллов (offline): сигналы и cleanup ----------------------
+# --- 5b. Покрытие правил тестами и соглашение о severity ----------------------
+# promtool проверяет только те правила, для которых есть тест: новый алерт без теста
+# прошёл бы молча. Опечатка в severity не ломает ни promtool, ни рендер, но уводит
+# уведомление в catch-all — поэтому enum проверяется по всем правилам (rule_coverage.py).
+step "покрытие правил тестами и enum severity"
+python3 "${PROJECT_ROOT}/scripts/checks/rule_coverage.py" \
+  "${RULEFILES_DIR}" "${PROJECT_ROOT}/rules/tests"
+
+# --- 5c. Поведение дриллов (offline): сигналы и cleanup ----------------------
 # Регресс на «passed без дрилла»: доказательство — JSON с result: passed, и его не
 # должно быть у прерванного прогона или при сбое cleanup. Кластер не нужен.
 step "тесты дриллов (offline)"

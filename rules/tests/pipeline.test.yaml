@@ -248,7 +248,8 @@ tests:
     input_series:
       - series: 'up{job="alloy", namespace="monitoring", instance="10.0.0.1:12345"}'
         values: '1x45'
-      - series: 'loki_process_dropped_lines_total{job="alloy", namespace="monitoring", reason="too_old", instance="10.0.0.1:12345"}'
+      - series: 'loki_process_dropped_lines_total{job="alloy", namespace="monitoring",
+          reason="too_old", instance="10.0.0.1:12345"}'
         values: '0x45'
     alert_rule_test:
       - eval_time: 40m
@@ -263,7 +264,8 @@ tests:
     input_series:
       - series: 'up{job="alloy", namespace="monitoring", instance="10.0.0.1:12345"}'
         values: '1x45'
-      - series: 'loki_process_dropped_lines_total{job="alloy", namespace="monitoring", reason="too_old", instance="10.0.0.1:12345"}'
+      - series: 'loki_process_dropped_lines_total{job="alloy", namespace="monitoring",
+          reason="too_old", instance="10.0.0.1:12345"}'
         values: '0x5 15000x40'
     alert_rule_test:
       - eval_time: 40m
@@ -276,7 +278,8 @@ tests:
     input_series:
       - series: 'up{job="alloy", namespace="monitoring", instance="10.0.0.1:12345"}'
         values: '1x45'
-      - series: 'loki_process_dropped_lines_total{job="alloy", namespace="monitoring", reason="too_old", instance="10.0.0.1:12345"}'
+      - series: 'loki_process_dropped_lines_total{job="alloy", namespace="monitoring",
+          reason="too_old", instance="10.0.0.1:12345"}'
         values: '0+60x45'
     alert_rule_test:
       - eval_time: 40m
