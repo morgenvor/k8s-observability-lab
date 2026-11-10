@@ -110,17 +110,25 @@ catch-all. Те же мутации, что и в предыдущем прог�
 rules` — `SUCCESS`. Чарты снова из локальных копий (`.tmp/chart-mirror/`, `sha256` сверены
 с `digest` индексов): GitHub отдавал `503` на `releases/download`.
 
-**2026-11-10, дашборды в воротах (v1.1, дашборд «Уведомления»).** Шаг «дашборды: валидность
-JSON» дополнен `scripts/checks/dashboards.py`: уникальность `uid`, существование `uid`
-datasource (панель и цель), метрики `alertsink_*` — только объявленные в `app/*/src/*.js`,
-`namespace` в селекторах Loki — только из списка, который читает Alloy. Вывод шага:
-`дашборды: проверено 3 файлов, панелей 19, datasource ['loki', 'prometheus'], метрик 11`.
-Пять негативных прогонов на копии дерева (`rc=1`): опечатка в имени метрики, дубль `uid`
-дашборда, `namespace="prod"` в селекторе Loki, несуществующий `uid` datasource, цель без
-`expr` — каждый падает своим сообщением.
+**2026-11-10, дашборды в воротах (v1.1, дашборд «Уведомления»; ассерт усилен по ревью).**
+Шаг «дашборды: валидность JSON» дополнен `scripts/checks/dashboards.py`: уникальность `uid`,
+существование `uid` datasource (панель и цель), каждое имя метрики в выражении Prometheus
+разрешается в `app/*/src/*.js`, в `record` из `rules/*.yaml` либо в явный список встроенных
+(`up`, `ALERTS`, process-метрики prom-client); `namespace` в селекторах Loki сверяется с
+ОТРЕНДЕРЕННЫМ конфигом Alloy (тот же файл, который разбирает `alloy_config.py`), `app` —
+с метками подов `deploy/`. Вывод шага: `дашборды: файлов 3, панелей 19, datasource
+['loki', 'prometheus'], метрик приложений 11 (alert-sink 4), записей правил 20, метрик в
+выражениях 22, самопроверок 8`.
 
-В песочнице, где шли прогоны, шагам `npm ci` и `docker build` нужны кеши внутри проекта
-(`npm_config_cache`, `DOCKER_CONFIG`) — это ограничение среды, а не проекта.
+**Самопроверка ассерта** (чтобы он не «ослеп» от правки регулярки) встроена в тот же шаг:
+каждый прогон мутирует копии проверенных дашбордов и требует ошибку с ожидаемым текстом —
+опечатка в префиксе метрики (`alertsnk_…`), несуществующая метрика prom-client, чужое имя
+метрики (`foo_bar_total`), `namespace=~"prod|demo"`, `app="alert_sink"`, дубль `uid`,
+несуществующий `uid` datasource, цель без `expr`. Проверено саботажем: если в ассерте
+заменить проверку метрики или селектора на `True`, шаг падает с `самопроверка «…»: мутация
+прошла молча` — то есть молчание самого ассерта тоже ловится. Проходят осознанно:
+`namespace!="monitoring"` (отрицательный матчер не сужает поток — он влияет на объём
+чтения, а не на пустоту панели) и `app=~"alert-.+"` (совпадает с метками подов).
 
 ## Дриллы (2026-11-05, стенд v1.37.1+k3s1)
 
@@ -169,7 +177,7 @@ datasource (панель и цель), метрики `alertsink_*` — толь
 | 2026-11-09 | Alloy: старые строки не доезжают до Loki | `rollout restart ds/alloy` (10:58:51Z), затем `kubectl logs -l app.kubernetes.io/name=loki --since=…` и `loki_process_dropped_lines_total` через Prometheus | после пересоздания подов (emptyDir новый, логи перечитаны с начала) в Loki **0** строк `entry too far behind` и в Alloy **0** ответов 400 за 20+ минут; фильтр отбросил **14 293** строки (13 639 + 654 по нодам) при пороге 1h, после первичного перечитывания счётчик не растёт. Замер с порогом 50m — 2026-11-09 после правки по ревью (см. строку ниже) |
 | 2026-11-09 | Alloy: повторный замер с порогом 50 минут | `helmfile apply -l name=alloy` (ревизия 6, hot-reload) + `rollout restart ds/alloy` в 10:58:51Z; через 10 минут — `kubectl logs` Loki и Alloy, `loki_process_dropped_lines_total{reason="too_old"}` в Prometheus | порог 50m даёт запас до окна приёма Loki (1 ч): за 10 минут и далее — **0** строк `entry too far behind`, **0** ответов 400; счётчик отброшенных строк вырос |
 | 2026-11-09 | `retentionSize` Prometheus: замер и правка | `/api/v1/status/tsdb`, `prometheus_tsdb_*`, `/api/v1/status/flags` через port-forward, `kubectl get pvc` | замер: `storage.tsdb.retention.time=3d`, `size` было `5GiB` (`retention_limit_bytes = 5 368 709 120`) при PVC **5Gi** — то есть 100 % тома, при том что считаются только блоки, а WAL (`127 006 710 B`) и `head_chunks_storage` (`12 582 809 B`) лежат сверху; 10 блоков = **673 MiB**, head-серий 106 786 при 221 174 чанках, итого ≈**806 MiB** (~16 % лимита). Сэмплы есть на 24, 48 и 90 ч назад, на 60–80 ч — нет (стенд был выключен); `kubelet_volume_stats_*` для этого PVC показывает ФС ноды (20,9 GB), а не квоту. Решение: `retentionSize` → **4GB** (≈80 % от 5Gi, рекомендация Prometheus), `helmfile apply -l name=monitoring` — ревизия 11; в CR `spec.retentionSize = 4GB` |
-| 2026-11-10 | дашборд «Уведомления» в Grafana | `kubectl diff/apply -k deploy/dashboards`, лог sidecar `grafana-sc-dashboard`, запросы Loki и Prometheus напрямую | `ConfigMap/notifications` создан (метка `grafana_dashboard=1`, папка `demo`), `demo-red` и `slo-demo` без диффа; sidecar записал файл и получил `Dashboards config reloaded` (200), `provisioning.dashboard` без ошибок; селектор лог-панели за 6 ч вернул 1 строку `notification_received` (`Watchdog`, `severity: none`), `up{job="alert-sink"} = 1`, `time() - max(alertsink_last_notification_timestamp_seconds)` ≈ 7 082 с; `increase()` по счётчикам = 0 — под рестартовал (`exitCode 255`) за секунды до единственного уведомления, ограничение записано в описании панелей |
+| 2026-11-10 | дашборд «Уведомления» в Grafana | `kubectl diff/apply -k deploy/dashboards`, лог sidecar `grafana-sc-dashboard`, запросы Loki и Prometheus напрямую | `ConfigMap/notifications` создан (метка `grafana_dashboard=1`, папка `demo`), `demo-red` и `slo-demo` без диффа; sidecar записал файл и получил `Dashboards config reloaded` (200), `provisioning.dashboard` без ошибок; селектор лог-панели за 6 ч вернул 1 строку `notification_received` (`Watchdog`, `severity: none`), `up{job="alert-sink"} = 1`, `time() - max(alertsink_last_notification_timestamp_seconds)` ≈ 7 082 с; `increase()` по счётчикам = 0 — под рестартовал (`exitCode 255`) за секунды до единственного уведомления, поэтому панели, обещавшие окно, после ревью переведены на счётчики «с запуска пода» и ConfigMap применён повторно (sidecar снова ответил `Dashboards config reloaded`); проверено живьём: `sum(alertsink_notifications_total) = 1`, `sort_desc(sum by (alertname, status) (alertsink_alert_events_total))` = `Watchdog/firing = 1`, `sum(increase(alertsink_requests_total{outcome!="ok"}[15m]))` — пусто (отказов не было), панель показывает 0 |
 | 2026-11-10 | свои info-алерты → `ticket` в живом кластере | `kubectl apply -f rules/pipeline.yaml -f rules/meta.yaml` (+ `rules/notifications.yaml`), `/api/v1/rules`, `prometheus_rule_group_rules` | `LokiNotIngesting` и `SloDemoNoTraffic` — `severity=ticket`, `health=ok`, `lastError` нет; `ALERTS` по ним пусто; своих `info` не осталось (23 `ticket`, 4 `page`, 27 алертов). Побочно: `PrometheusRule demo-alerting-path` в кластере **отсутствовал** (три heartbeat-правила были только в git) — применён, групп проекта стало 11 вместо 10 |
 
 Как проверить это повторно (временное правило по реальному трафику, без выдуманных строк

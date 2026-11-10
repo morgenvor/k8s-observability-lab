@@ -175,8 +175,11 @@ fi
 # Синтаксически валидный дашборд может ссылаться на несуществующую метрику, на чужой uid
 # datasource или на namespace, который Alloy не читает: панель тогда молчит («No data»),
 # и отличить поломку от тишины по экрану нельзя (scripts/checks/dashboards.py).
+# Namespace берётся из отрендеренного конфига Alloy (шаг выше), а не из values: два
+# парсера одного факта разошлись бы между собой.
 if [ "${#DASH_FILES[@]}" -gt 0 ]; then
-  python3 "${PROJECT_ROOT}/scripts/checks/dashboards.py" "${PROJECT_ROOT}"
+  python3 "${PROJECT_ROOT}/scripts/checks/dashboards.py" \
+    "${PROJECT_ROOT}" "${ALLOY_RENDERED_CONFIG}"
 fi
 
 # --- 4b. Оверлей деплоя: тег подставляется во ВСЕ образы приложений ---------

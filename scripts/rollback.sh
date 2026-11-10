@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Откат демо-контура: удаляет объекты из того же рендера, что и scripts/deploy.sh.
 # Удаление namespace demo уносит поды/сервисы/ServiceMonitor; объекты в monitoring
-# (дашборды demo-red, slo-demo и PrometheusRule demo-*) удаляются отдельно.
+# (дашборды demo-red, slo-demo, notifications и PrometheusRule demo-*) удаляются отдельно.
+# Узкий откат одного дашборда — `kubectl -n monitoring delete cm notifications`.
 # Внимание: вместе с правилами уходит и SLO-оповещение, включая SloRulesAbsent.
 # Образы в containerd остаются — они безвредны.
 # Использование: ./scripts/rollback.sh [--yes]
@@ -27,7 +28,7 @@ RENDERED="$(render_demo_manifests "${TAG}")"
 
 if [ "${ASSUME_YES}" -ne 1 ]; then
   [ -t 0 ] || die "нет интерактивного ввода (stdin не tty): для неинтерактивного запуска используй --yes"
-  warn "будут удалены namespace demo (поды/сервисы демо-контура), дашборды demo-red и slo-demo, PrometheusRule demo-slo/demo-slo-alerts/demo-infra/demo-meta/demo-logs-pipeline в monitoring"
+  warn "будут удалены namespace demo (поды/сервисы демо-контура), дашборды demo-red, slo-demo и notifications, PrometheusRule demo-slo/demo-slo-alerts/demo-infra/demo-meta/demo-logs-pipeline в monitoring"
   printf 'Продолжить? [y/N] '
   # || answer="": при EOF read возвращает 1 и под set -e скрипт падал бы без сообщения
   read -r answer || answer=""

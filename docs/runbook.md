@@ -31,6 +31,12 @@
   манифестах и запросах
   панелей. Переименование — это правка `rules/*.yaml`, `deploy/`, `deploy/dashboards/*.json`
   и `helm/values/kps.yaml` вместе; частично переименованный набор даёт молчащие алерты.
+  Порог «молчания маршрута» тоже продублирован: 5,5 ч = 19800 с в панели «Молчание
+  маршрута» (`deploy/dashboards/notifications.json`) и в правилах
+  `AlertSinkHeartbeatMissing`/`AlertSinkNeverReceived` (`rules/notifications.yaml`).
+  Меняя `repeatInterval` Watchdog или `for` этих правил, правь и дашборд — иначе панель
+  и алерт начнут говорить разное (офлайн это не ловится: у панели и правила разные
+  форматы).
 - **Registry.** Его нет: образы собираются локально и импортируются в containerd **каждой**
   ноды (`scripts/import-image.sh`), тег = короткий git SHA. Сторонние образы (Loki, Alloy,
   `busybox` для init-контейнера Grafana) — тем же путём через `IMPORT_IMAGES`. Если у тебя
@@ -159,6 +165,10 @@ containerd пишет на диск десятки секунд, API starve-ит
 ```bash
 ./scripts/rollback.sh        # спросит подтверждение
 ./scripts/rollback.sh --yes  # без вопроса
+# узкий откат одного дашборда, не трогая контур (обратная операция к
+# `kubectl apply -k deploy/dashboards`): под в Grafana исчезнет после того, как sidecar
+# уберёт файл, рестарт Grafana не нужен
+kubectl -n monitoring delete cm notifications
 ```
 
 ### Приёмка после деплоя
@@ -788,7 +798,7 @@ kubectl -n demo get endpointslices -l kubernetes.io/service-name=demo-api \
 | `up{job="demo-api"}` пусто | у ServiceMonitor нет метки `release: monitoring` или селектор не совпал с меткой Service | `kubectl -n demo get servicemonitor -o yaml`, сверить `selector.matchLabels` |
 | дашборда нет в Grafana | нет метки `grafana_dashboard=1` или sidecar не видит namespace | `kubectl -n monitoring get cm demo-red slo-demo notifications --show-labels`, логи контейнера `grafana-sc-dashboard` |
 | нет серий `slo:*` | `PrometheusRule` без метки `release=monitoring`, группа падает или оператор не перезагрузил правила | `kubectl -n monitoring get prometheusrule \| grep demo-`, `curl … /api/v1/rules` и поле `lastError` группы |
-| панель «Журнал уведомлений» пуста, а «Принято за окно» растёт | строки не доехали до Loki (Alloy, `stage.drop`, retention) — sink тут не при чём, `/timeline` в это время полон | `kubectl -n monitoring logs ds/alloy -c alloy --tail=20`, запрос `{namespace="demo", app="alert-sink"}` в Explore |
+| панель «Журнал уведомлений» пуста, а «Принято за окно» растёт | строки не доехали до Loki (Alloy, `stage.drop`, retention) — sink тут не при чём, в `/timeline` записи продолжают появляться | `kubectl -n monitoring logs ds/alloy -c alloy --tail=20`, запрос `{namespace="demo", app="alert-sink"}` в Explore |
 | в `/timeline` пусто | маршрут не подхвачен: `AlertmanagerConfig` не создан или не в `monitoring`, `matcherStrategy` не `None`, sink в `CrashLoop` | `kubectl -n monitoring get alertmanagerconfig`, сгенерированный конфиг (шаг 4), `kubectl -n demo logs deploy/alert-sink` |
 | `demo-load` считает `outcome="error"` | toxiproxy недоступен или прокси выключен | `kubectl -n demo port-forward svc/toxiproxy 8474:8474`, затем `GET /proxies` |
 | под demo-api бесконечно рестартует | падает проба или не хватает лимитов | `kubectl -n demo describe pod`, `kubectl -n demo logs <pod> --previous` |
