@@ -63,13 +63,20 @@ spec:
             periodSeconds: 10
             timeoutSeconds: 2
             failureThreshold: 3
+          # Запас выше «среднего» потребления (0.005 ядра, 83 МиБ) намеренно: 09.11
+          # одна реплика дважды показала, что упирается в лимиты — 100 % периодов CFS
+          # затроттлено две минуты подряд при limits.cpu=200m, и под ушёл в NotReady
+          # (сработали только pending TargetDown/KubePodNotReady). Сценарий тот же, что
+          # у demo-load: кратковременный рост цены запроса, который в лимит не влезает.
+          # Память: рабочий набор уже 83 МиБ из 128Mi, а рост heap V8 наблюдался.
+          # requests не меняем — они про планирование, а не про потолок.
           resources:
             requests:
               cpu: 50m
               memory: 64Mi
             limits:
-              cpu: 200m
-              memory: 128Mi
+              cpu: 500m
+              memory: 192Mi
           securityContext:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true
