@@ -16,10 +16,12 @@
 # Проверять не глазами, а `.tmp/rendered/helmfile.yaml` и живым /api/v1/targets.
 #
 # Severity по контракту проекта: page — только SLO burn-rate fast и SloRulesAbsent
-# (отказ сервиса и его страниц), ticket — событие для планового разбора, info —
-# контекст, который может быть и не дефектом (LokiNotIngesting: «возможно, просто
-# тихо»). Слепота, за которой больше нет ни одного сигнала, — ticket: так устроены
-# heartbeat пути уведомлений и сторожа правила ruler.
+# (отказ сервиса и его страниц), ticket — событие для планового разбора. Свои info
+# не ставим: ингибитор чарта (source: InfoInhibitor, target: severity="info", equal:
+# namespace) глушит одиночный info, и такой алерт до sink не доходит вовсе —
+# проверено на стенде 2026-11-10 (rules/meta.yaml, LoadGeneratorThrottled). Слепота,
+# за которой больше нет сигнала, — ticket: heartbeat пути уведомлений, сторожа
+# правила ruler, этот пайплайн.
 # Логи не источник истины о доступности demo-api, поэтому отказ Loki/Alloy — ticket,
 # а не page: SLO продолжает считаться по метрикам.
 # Маршрут — дерево по severity (deploy/monitoring/alertmanagerconfig.yaml):
@@ -94,15 +96,15 @@ spec:
             runbook_url: "https://github.com/morgenvor/k8s-observability-lab/blob/main/docs/runbook.md#пайплайн-логов"
         # Конец цепочки logs: Alloy -> Loki. Если строки перестали приходить при
         # живом Loki, сломано звено выше (Alloy, RBAC, сеть, config) — либо в лабе
-        # действительно нет ни одной новой строки лога, что для demo/monitoring
-        # маловероятно, но возможно. Поэтому info, а не ticket: цена ложного
-        # срабатывания выше цены пропущенного сигнала, а падение Alloy ловят
-        # отдельные правила ниже.
+        # выключен сам демо-контур. Для demo/monitoring непрерывная запись — норма,
+        # поэтому тишина считается дефектом и уходит ticket: одиночный info глушит
+        # InfoInhibitor (см. шапку), то есть прежний info не доставлялся вообще.
+        # Падение Alloy ловят отдельные правила ниже — здесь именно «строк нет».
         - alert: LokiNotIngesting
           expr: sum(rate(loki_distributor_lines_received_total[15m])) == 0
           for: 30m
           labels:
-            severity: info
+            severity: ticket
             service: loki
             namespace: monitoring
           annotations:
@@ -111,7 +113,8 @@ spec:
               За 15 минут distributor Loki не принял ни одной строки, и так уже 30
               минут. Проверь Alloy (DaemonSet 2/2, его логи), push-URL
               loki.monitoring.svc:3100 и фильтр __meta_kubernetes_pod_node_name;
-              если всё цело — возможно, в demo и monitoring просто тихо.
+              если всё цело — возможно, выключен демо-контур: для лабы непрерывная
+              запись логов — норма, поэтому тишина считается дефектом.
             runbook_url: "https://github.com/morgenvor/k8s-observability-lab/blob/main/docs/runbook.md#пайплайн-логов"
 
         # Сторож самого правила ruler. У правил Prometheus такой есть (rules/meta.yaml),

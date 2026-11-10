@@ -170,6 +170,10 @@ rules` — `SUCCESS`. Чарты снова из локальных копий (
   `LokiRulerEvaluationFailing`) с возвратом состояния по `kubectl apply -k
   deploy/loki-rules`. Подтверждено живьём только существование опорных метрик
   (`loki_prometheus_rule_evaluations_total`, `…_failures_total` — строка 2026-11-08);
+- перевод `LokiNotIngesting` и `SloDemoNoTraffic` из `info` в `ticket` (2026-11-10):
+  причина — проверенное глушение одиночного info ингибитором `InfoInhibitor`; доставка
+  на новом severity живьём не проверялась (нужна инъекция: остановить `demo-load` или
+  прекратить запись логов);
 - heartbeat пути уведомлений (правила `AlertSinkHeartbeatMissing`, `AlertSinkNeverReceived`);
 - срабатывание `DemoApi5xxFromLogs` именно на **реальном 5xx**. Путь «правило →
   Alertmanager → sink» доказан 2026-11-09 пробным правилом на обычных логах, но ни одного

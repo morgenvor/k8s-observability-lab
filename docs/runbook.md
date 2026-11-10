@@ -516,7 +516,7 @@ curl -s http://127.0.0.1:9090/api/v1/rules | jq '.data.groups[] | select(.name|s
   перезагрузка конфига Prometheus, сбои уведомлений Alertmanager) приходит от чарта
   kube-prometheus-stack: её `runbook_url` указывает на runbooks.prometheus-operator.dev.
 - Пайплайн логов — `rules/pipeline.yaml` (PrometheusRule `demo-logs-pipeline`), 10 правил:
-  `LokiDown` и `LokiTargetMissing` (ticket), `LokiNotIngesting` (info),
+  `LokiDown`, `LokiTargetMissing`, `LokiNotIngesting` (ticket),
   `AlloyDown`, `AlloyTargetMissing`, `AlloyCoverageIncomplete`, `AlloyDroppedLogs`,
   `AlloyOldLogsDropped`, `LokiRulerRulesMissing`, `LokiRulerEvaluationFailing` (ticket). Пара «цель есть, но не отвечает» (`up == 0`) и «цели нет вовсе»
   (`absent(up)`) — разные сигналы: при удалённом поде/объекте серия `up` исчезает, и
@@ -1046,11 +1046,13 @@ kube-prometheus-stack.
   живы, а страниц нет. Первый шаг — тот же `/api/v1/rules`; селектор по `rule_group`
   держится на формате `<путь>;<имя группы>` (проверено на стенде), поэтому ищи хвост
   `;demo-slo.alerts.availability`.
-- `SloDemoNoTraffic` (info) — `demo-load` жив, но за 10 минут не отправил ни одного
+- `SloDemoNoTraffic` (ticket) — `demo-load` жив, но за 10 минут не отправил ни одного
   запроса — и так уже 15 минут (правило держит `for: 15m`); либо цель `demo-load`
   пропала из Prometheus совсем. Проверь под `demo-load`, его логи,
   `load_ticks_skipped_total` и конфиг toxiproxy: генератор мог остаться без цели.
-  `info`, а не page: «нет трафика» — не отказ сервиса, а дефект фикстуры.
+  `ticket`, а не page: сервис не отказывает, это дефект генератора. `info` не годится:
+  одиночный info глушит `InfoInhibitor` чарта, и такой алерт до sink не доходит
+  (проверено 2026-11-10 на `CPUThrottlingHigh`).
 
 Подробности про выгрузку правил для `promtool` и про то, почему сторожей два, —
 раздел «Правила Prometheus (фаза 3)».
@@ -1085,9 +1087,11 @@ kube-prometheus-stack.
   логов (ошибки чтения в логе контейнера `alloy`). Цена ошибки — потеря логов
   `demo`/`monitoring` без других симптомов: `up`, `loki_write_dropped_*` и Loki
   при этом здоровы.
-- `LokiNotIngesting` (info): distributor 15 минут не принимал строк, и так уже 30
+- `LokiNotIngesting` (ticket): distributor 15 минут не принимал строк, и так уже 30
   минут при живом процессе. Смотри Alloy, push-URL `loki.monitoring.svc:3100` и фильтр
-  `__meta_kubernetes_pod_node_name`; возможно, в `demo`/`monitoring` просто тихо.
+  `__meta_kubernetes_pod_node_name`; для лабы непрерывная запись логов — норма, поэтому
+  тишина считается дефектом (а не «просто тихо»); `info` не годится — его глушит
+  `InfoInhibitor` чарта (проверено 2026-11-10).
 
 Как читать логи и метрики — разделы «Логи: Loki и Alloy» и «Метрики Loki и Alloy».
 

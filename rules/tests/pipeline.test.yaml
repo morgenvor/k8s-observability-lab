@@ -83,14 +83,15 @@ tests:
           - exp_labels:
               namespace: monitoring
               service: loki
-              severity: info
+              severity: ticket
             exp_annotations:
               summary: "Loki: строки не поступают"
               description: >-
                 За 15 минут distributor Loki не принял ни одной строки, и так уже 30
                 минут. Проверь Alloy (DaemonSet 2/2, его логи), push-URL
                 loki.monitoring.svc:3100 и фильтр __meta_kubernetes_pod_node_name;
-                если всё цело — возможно, в demo и monitoring просто тихо.
+                если всё цело — возможно, выключен демо-контур: для лабы непрерывная
+                запись логов — норма, поэтому тишина считается дефектом.
               runbook_url: "https://github.com/morgenvor/k8s-observability-lab/blob/main/docs/runbook.md#пайплайн-логов"
 
   - name: "Loki принимает строки: LokiNotIngesting молчит"

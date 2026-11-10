@@ -43,7 +43,7 @@ tests:
         alertname: SloDemoNoTraffic
         exp_alerts:
           - exp_labels:
-              severity: info
+              severity: ticket
               service: demo-api
               namespace: demo
             exp_annotations:
@@ -95,7 +95,7 @@ tests:
         alertname: SloDemoNoTraffic
         exp_alerts:
           - exp_labels:
-              severity: info
+              severity: ticket
               service: demo-api
               namespace: demo
             exp_annotations:
