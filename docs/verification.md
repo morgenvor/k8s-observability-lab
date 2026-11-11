@@ -24,7 +24,8 @@ logs_url 2`, анкоров в runbook 38, `page`-анкоров 4; `kustomize` 
 (`alert-sink 5`); пять наборов `promtool test rules` — `SUCCESS`, покрытие «29 из 29»,
 срабатывающий кейс есть у всех 29 (добавлены сценарии medium/slow); тесты приложений
 21 + 16 + 12 = 49; новый шаг «ServiceMonitor'ы демо-контура» — 3 объекта,
-`release=monitoring`, селекторы совпадают с метками подов; сканы секретов и адресов —
+`release=monitoring`, Service выбран по меткам, порт и namespace согласованы; сканы
+секретов и адресов —
 10 совпадений, все `example.invalid`/`example.com`. Кластер не использовался: живые
 проверки ниже относятся к предыдущим датам, новые правила `AlertPathRulesAbsent` и
 `LogsPipelineRulesAbsent` подтверждены только `promtool`.
