@@ -121,7 +121,7 @@ done
 # containerd хранит образ с полным именем (docker.io/library/demo-api:тег,
 # docker.io/grafana/loki:тег), поэтому сверяем по суффиксу. Сравнение — glob в `case`,
 # а не regex: точки в теге (3.6.11) не должны превращаться в «любой символ», а кавычки
-# в имени не должны ломать удалённую команду (нашло ревью фазы 5).
+# в имени не должны ломать удалённую команду (нашло ревью).
 for node in "${NODES[@]}"; do
   info "проверка ${node}"
   mapfile -t NODE_IMAGES < <(ssh -F "${SSH_CONFIG}" "${SSH_OPTS[@]}" "${node}" 'sudo -n k3s ctr images ls -q')

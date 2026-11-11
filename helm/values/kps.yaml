@@ -5,7 +5,7 @@
 # ужаты только retention/storage/интервалы/ресурсы. Пин чарта: 92.14.1.
 # Исключение 2026-11-04: выключены kube-controller-manager, kube-scheduler и
 # kube-proxy — их в k3s нет как отдельных целей (см. блок в конце файла).
-# Порядок урезания при красных замерах — см. план окна (retention→лимиты→alertmanager).
+# Порядок урезания при красных замерах: retention → лимиты → Alertmanager.
 # Источник дефолтов: prometheus-community/kube-prometheus-stack 92.14.1 (values.yaml).
 
 prometheus:
@@ -13,7 +13,7 @@ prometheus:
   prometheusSpec:
     # 2026-11-03: 24h→72h — окно SLO 3 дня (медленный burn rate 1x/3d)
     # влезает в тот же PVC 5Gi.
-    # 2026-11-09 (ревью фазы 6): retentionSize 5GB → 4GB. `GB` у Prometheus —
+    # 2026-11-09 (по ревью): retentionSize 5GB → 4GB. `GB` у Prometheus —
     # power-of-2, то есть 5GB читался как 5GiB = 100 % PVC: лимит успел бы заполнить
     # диск раньше, чем сработает. Считаются при этом ТОЛЬКО блоки, а WAL и
     # chunks_head (в замере 121 + 12 MiB, пики каждые 2 часа) лежат сверху, плюс

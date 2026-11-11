@@ -106,7 +106,7 @@ singleBinary:
       readOnly: true
   persistence:
     # Явно, хотя дефолт чарта — true: PVC 5Gi и его удаление при destroy — часть
-    # контракта отката фазы 5, а не случайная деталь values.
+    # контракта отката, а не случайная деталь values.
     enabled: true
     size: 5Gi
     # 2026-11-07: когда StatefulSet масштабируют в 0, том НЕ удаляется.
@@ -144,7 +144,7 @@ gateway:
 
 # Canary пишет тестовые строки в тот же Loki (лишние streams и память), а helm-тест
 # требует canary — поэтому выключаем обоих. Проверка работоспособности — живыми
-# запросами из Grafana (план, шаг «живое»).
+# запросами из Grafana (живые замеры).
 lokiCanary:
   enabled: false
 test:

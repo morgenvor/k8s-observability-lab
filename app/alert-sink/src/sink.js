@@ -2,7 +2,7 @@
 //
 // Зачем отдельный сервис: Alertmanager принадлежит чарту, и «алерт сработал» ещё не
 // значит «уведомление дошло». Sink принимает webhook Alertmanager v2, хранит кольцо
-// последних уведомлений в памяти (/timeline читают дриллы фазы 6 и живая проверка)
+// последних уведомлений в памяти (/timeline читают дриллы и живая проверка)
 // и считает метрики доставки. Внешних зависимостей нет, только prom-client.
 import http from 'node:http';
 import { pathToFileURL } from 'node:url';
@@ -175,7 +175,7 @@ function topSeverity(alerts) {
   return best;
 }
 
-// Форма записи /timeline зафиксирована контрактом плана: поля snake_case, starts_at/
+// Форма записи /timeline зафиксирована контрактом: поля snake_case, starts_at/
 // ends_at — из startsAt/endsAt Alertmanager (null, если поля нет в payload).
 function buildEntry(payload, receivedAt) {
   return {

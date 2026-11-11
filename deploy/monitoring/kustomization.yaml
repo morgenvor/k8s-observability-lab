@@ -3,8 +3,8 @@ kind: Kustomization
 # Объекты проекта, которые обязаны жить в monitoring: их ищет оператор
 # kube-prometheus-stack. Отдельный каталог, а не deploy/base, потому что в base
 # стоит `namespace: demo`, и трансформер namespace переписал бы AlertmanagerConfig
-# в demo — маршрут оказался бы в namespace фикстуры, хотя решение плана этого не
-# предполагает. Держим это здесь, а не в rules/: правила проверяет promtool.
+# в demo — маршрут оказался бы в namespace фикстуры, хотя по замыслу он должен
+# жить в monitoring. Держим это здесь, а не в rules/: правила проверяет promtool.
 resources:
   - alertmanagerconfig.yaml
 

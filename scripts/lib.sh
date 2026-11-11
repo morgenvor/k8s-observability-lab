@@ -160,7 +160,7 @@ render_demo_manifests() {
     printf 'resources:\n  - ../../deploy/base\n  - ../../deploy/dashboards\n  - ../../deploy/loki-rules\n  - ../../deploy/monitoring\n  - ../../rules\n'
     printf 'images:\n'
     # Список образов — из app/*/Dockerfile, как в build-image.sh/import-image.sh:
-    # иначе новый сервис (alert-sink в фазе 4) отрендерился бы с заглушкой :local.
+    # иначе новый сервис (alert-sink) отрендерился бы с заглушкой :local.
     for dockerfile in "${images[@]}"; do
       printf '  - name: %s\n    newTag: %s\n' "${dockerfile}" "${tag}"
     done

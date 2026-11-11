@@ -61,7 +61,7 @@ else
   SKIPPED+=("yamllint (не установлен)")
 fi
 
-# --- 2. Тесты приложений (появляются с фазой 1) ------------------------------
+# --- 2. Тесты приложений ----------------------------------------------------
 shopt -s nullglob
 for pkg in app/*/package.json; do
   app_dir="$(dirname "${pkg}")"
@@ -79,7 +79,7 @@ helmfile -f helmfile.yaml template > .tmp/rendered/helmfile.yaml
 kubeconform -strict -ignore-missing-schemas -summary -output text .tmp/rendered/helmfile.yaml
 
 # --- 3a. Семантика значений Loki/Alloy: kubeconform видит только структуру ----
-# Гарантии фазы 5 иначе держатся на ручном прогоне бинарей (правило 10), а смена
+# Гарантии Loki/Alloy иначе держатся на ручном прогоне бинарей (правило 10), а смена
 # ключа чартом или опечатка в values уехала бы в кластер молча.
 step "семантика значений Loki/Alloy в рендере"
 grep -q 'retention_period: 72h' .tmp/rendered/helmfile.yaml \
@@ -183,8 +183,8 @@ if [ "${#DASH_FILES[@]}" -gt 0 ]; then
 fi
 
 # --- 4b. Оверлей деплоя: тег подставляется во ВСЕ образы приложений ---------
-# Ловит два класса ошибок: новый сервис с тегом :local (так было бы с alert-sink
-# в фазе 4) и случайную заглушку, доехавшую до манифестов.
+# Ловит два класса ошибок: новый сервис с тегом :local (так было бы с alert-sink)
+# и случайную заглушку, доехавшую до манифестов.
 step "рендер оверлея деплоя (теги образов)"
 OVERLAY_RENDER="$(render_demo_manifests ci-check)"
 shopt -s nullglob
@@ -328,7 +328,7 @@ shopt -u nullglob
 if [ "${#RULE_TESTS[@]}" -gt 0 ]; then
   promtool test rules "${RULE_TESTS[@]}"
 else
-  SKIPPED+=("promtool test rules (rules/tests появятся в фазе 3)")
+  SKIPPED+=("promtool test rules (rules/tests не найдены)")
 fi
 
 # --- 5b. Покрытие правил тестами и соглашение о severity ----------------------
