@@ -221,7 +221,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "histogram_quantile(0.95, sum by (le) (rate(http_request_duration_seconds_bucket{job=\"demo-api\"}[5m])))",
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(http_request_duration_seconds_bucket{job=\"demo-api\",route=\"/work\"}[5m])))",
           "legendFormat": "сервер demo-api"
         },
         {
@@ -299,7 +299,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "sum(rate(load_request_duration_seconds_bucket{job=\"demo-load\",le=\"0.3\"}[5m])) / clamp_min(sum(rate(load_request_duration_seconds_count{job=\"demo-load\"}[5m])), 1e-9)",
+          "expr": "slo:demo_latency:ratio_5m",
           "legendFormat": "доля ≤ 300 мс"
         }
       ]
@@ -307,7 +307,7 @@
     {
       "id": 5,
       "title": "Логи demo (Loki)",
-      "description": "stdout подов namespace demo из Loki: demo-api, demo-load, alert-sink, toxiproxy. Строки — JSON, `| json` разбирает поля (status, duration_ms, request_id, outcome); они видны по клику на строку, фильтры удобнее строить в Explore. Пусто при живом трафике — смотреть доставку: kubectl -n monitoring logs ds/alloy -c alloy. Метки потока: namespace, app, pod, container (низкая кардинальность), retention 72h.",
+      "description": "stdout подов namespace demo из Loki: demo-api, demo-load, alert-sink, toxiproxy. Строки — JSON, `| json` разбирает поля (status, duration_ms, request_id, outcome); они видны по клику на строку, фильтры удобнее строить в Explore. Пусто при живом трафике — смотреть доставку: kubectl -n monitoring logs ds/alloy -c alloy. Метки потока: namespace, app, pod, container, app_kubernetes_io_name, cluster (низкая кардинальность), retention 72h.",
       "type": "logs",
       "gridPos": {
         "h": 10,

@@ -30,7 +30,7 @@
         "iconColor": "red",
         "expr": "ALERTS{alertstate=\"firing\", service=\"demo-api\"}",
         "tagKeys": "alertname",
-        "titleFormat": "{{alertname}} · {{slo}}",
+        "titleFormat": "{{alertname}}",
         "textFormat": "{{severity}}"
       }
     ]
@@ -94,7 +94,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "clamp_max(1 - ((1 - slo:demo_availability:ratio_3d) / 0.01), 1)",
+          "expr": "clamp(1 - ((1 - slo:demo_availability:ratio_3d) / 0.01), 0, 1)",
           "legendFormat": "бюджет доступности"
         }
       ]
@@ -157,7 +157,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "clamp_max(1 - ((1 - slo:demo_latency:ratio_3d) / 0.05), 1)",
+          "expr": "clamp(1 - ((1 - slo:demo_latency:ratio_3d) / 0.05), 0, 1)",
           "legendFormat": "бюджет латентности"
         }
       ]
@@ -552,6 +552,21 @@
       "options": {
         "showHeader": true
       },
+      "transformations": [
+        {
+          "id": "organize",
+          "options": {
+            "excludeByName": {
+              "Time": true
+            },
+            "renameByName": {
+              "Value": "SLI",
+              "service": "Сервис",
+              "slo": "SLO"
+            }
+          }
+        }
+      ],
       "targets": [
         {
           "refId": "A",
@@ -561,8 +576,7 @@
           },
           "expr": "slo:demo_availability:ratio_3d or slo:demo_latency:ratio_3d",
           "format": "table",
-          "instant": true,
-          "legendFormat": "{{slo}}"
+          "instant": true
         }
       ]
     }
