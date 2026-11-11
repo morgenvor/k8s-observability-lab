@@ -1,0 +1,124 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 780" width="960" height="780" role="img" aria-labelledby="t d">
+  <title id="t">Alert route: four child routes, an explicit catch-all and rules that watch the path</title>
+  <desc id="d">Prometheus and the Loki ruler send alerts to Alertmanager. Four child routes are evaluated in order: alertname matching AlertSink, then severity page or critical, both to e-mail with continue true; then severity ticket, info, warning or none to alert-sink; then a catch-all without matchers to alert-sink. Three heartbeat rules and two group guards watch the route itself.</desc>
+  <style>
+    text { font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; fill: #e6ebf5; }
+    .muted { fill: #8b96ad; }
+    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+    .tag { font-size: 9px; font-weight: 600; letter-spacing: .08em; }
+    .flow { stroke-dasharray: 5 8; animation: flow 1.6s linear infinite; }
+    @keyframes flow { to { stroke-dashoffset: -26; } }
+    .a0, .a1, .a2, .a3, .a4, .foot { transform-box: fill-box; transform-origin: center; }
+    @keyframes a0 { 0%,2.0% { opacity: 0; transform: translateY(6px); } 4.5%,94% { opacity: 1; transform: translateY(0); } 100% { opacity: 0; transform: translateY(0); } } .a0 { animation: a0 12s infinite; }
+    @keyframes a1 { 0%,8.0% { opacity: 0; transform: translateY(6px); } 10.5%,94% { opacity: 1; transform: translateY(0); } 100% { opacity: 0; transform: translateY(0); } } .a1 { animation: a1 12s infinite; }
+    @keyframes a2 { 0%,14.0% { opacity: 0; transform: translateY(6px); } 16.5%,94% { opacity: 1; transform: translateY(0); } 100% { opacity: 0; transform: translateY(0); } } .a2 { animation: a2 12s infinite; }
+    @keyframes a3 { 0%,20.0% { opacity: 0; transform: translateY(6px); } 22.5%,94% { opacity: 1; transform: translateY(0); } 100% { opacity: 0; transform: translateY(0); } } .a3 { animation: a3 12s infinite; }
+    @keyframes a4 { 0%,26.0% { opacity: 0; transform: translateY(6px); } 28.5%,94% { opacity: 1; transform: translateY(0); } 100% { opacity: 0; transform: translateY(0); } } .a4 { animation: a4 12s infinite; }
+    @keyframes foot { 0%,32.0% { opacity: 0; } 34.5%,94% { opacity: 1; } 100% { opacity: 0; } } .foot { animation: foot 12s infinite; }
+    @media (prefers-reduced-motion: reduce) { * { animation: none !important; } .a0,.a1,.a2,.a3,.a4,.foot { opacity: 1; } }
+  </style>
+  <defs>
+    <marker id="purple" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 Z" fill="#b58cff"/>
+    </marker>
+    <marker id="orange" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 Z" fill="#ff8a1f"/>
+    </marker>
+    <marker id="amber" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 Z" fill="#ffb02e"/>
+    </marker>
+    <marker id="grey" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 Z" fill="#5a6785"/>
+    </marker>
+  </defs>
+
+  <rect width="960" height="780" rx="20" fill="#0f1420"/>
+  <rect x="1" y="1" width="958" height="778" rx="19" fill="none" stroke="#232c3f"/>
+  <text x="40" y="52" font-size="28" font-weight="800">One alert, four exits</text>
+  <text x="40" y="78" font-size="15" class="muted">Severity picks the receiver; an explicit catch-all keeps an unknown severity from disappearing</text>
+
+  <!-- sources -->
+  <g class="a0">
+    <rect x="230" y="110" width="190" height="64" rx="12" fill="#3ec7ff" fill-opacity=".10" stroke="#3ec7ff" stroke-opacity=".55"/>
+    <text x="254" y="140" font-size="15" font-weight="700">Prometheus</text>
+    <text x="254" y="162" font-size="11" class="mono" style="fill:#a8e4ff">49 rules · 29 alerts</text>
+    <text x="408" y="127" text-anchor="end" class="tag muted">MONITORING</text>
+
+    <rect x="560" y="110" width="190" height="64" rx="12" fill="#3ec7ff" fill-opacity=".10" stroke="#3ec7ff" stroke-opacity=".55"/>
+    <text x="584" y="140" font-size="15" font-weight="700">Loki ruler</text>
+    <text x="584" y="162" font-size="11" class="mono" style="fill:#a8e4ff">one rule on log content</text>
+    <text x="738" y="127" text-anchor="end" class="tag muted">MONITORING</text>
+  </g>
+
+  <!-- alertmanager -->
+  <g class="a1">
+    <rect x="340" y="220" width="280" height="84" rx="12" fill="#b58cff" fill-opacity=".10" stroke="#b58cff" stroke-opacity=".55"/>
+    <text x="364" y="252" font-size="15" font-weight="700">Alertmanager</text>
+    <text x="364" y="276" font-size="11" class="mono" style="fill:#d9c6ff">groupBy alertname, service</text>
+    <text x="364" y="293" font-size="11" class="mono" style="fill:#d9c6ff">groupWait 10s · repeat 4h · resolved</text>
+    <text x="608" y="237" text-anchor="end" class="tag muted">MONITORING</text>
+    <line x1="325" y1="174" x2="394" y2="218" stroke="#b58cff" stroke-width="2" class="flow" marker-end="url(#purple)"/>
+    <line x1="655" y1="174" x2="566" y2="218" stroke="#b58cff" stroke-width="2" class="flow" marker-end="url(#purple)"/>
+    <text x="325" y="196" text-anchor="end" font-size="9" class="muted">firing</text>
+    <text x="660" y="196" font-size="9" class="muted">firing</text>
+  </g>
+
+  <!-- route tree -->
+  <g class="a2">
+    <path d="M480,304 V330 H210 V548" fill="none" stroke="#5a6785" stroke-width="1.5"/>
+    <line x1="210" y1="374" x2="246" y2="374" stroke="#5a6785" stroke-width="1.5" marker-end="url(#grey)"/>
+    <line x1="210" y1="432" x2="246" y2="432" stroke="#5a6785" stroke-width="1.5" marker-end="url(#grey)"/>
+    <line x1="210" y1="490" x2="246" y2="490" stroke="#5a6785" stroke-width="1.5" marker-end="url(#grey)"/>
+    <line x1="210" y1="548" x2="246" y2="548" stroke="#5a6785" stroke-width="1.5" marker-end="url(#grey)"/>
+  </g>
+
+  <!-- matchers -->
+  <g class="a3">
+    <rect x="250" y="352" width="350" height="44" rx="10" fill="#1a2233" stroke="#2c3750"/>
+    <text x="266" y="379" font-size="11.5" class="mono" style="fill:#d9c6ff">alertname =~ "AlertSink.*"</text>
+    <text x="586" y="379" text-anchor="end" class="tag muted">FIRST</text>
+
+    <rect x="250" y="410" width="350" height="44" rx="10" fill="#1a2233" stroke="#2c3750"/>
+    <text x="266" y="437" font-size="11.5" class="mono" style="fill:#d9c6ff">severity =~ "page|critical"</text>
+    <text x="586" y="437" text-anchor="end" class="tag muted">CONTINUE</text>
+
+    <rect x="250" y="468" width="350" height="44" rx="10" fill="#1a2233" stroke="#2c3750"/>
+    <text x="266" y="495" font-size="11.5" class="mono" style="fill:#ffd48a">severity =~ "ticket|info|warning|none"</text>
+
+    <rect x="250" y="526" width="350" height="44" rx="10" fill="#1a2233" stroke="#2c3750"/>
+    <text x="266" y="553" font-size="11.5" class="mono" style="fill:#ffd48a">no matchers</text>
+    <text x="586" y="553" text-anchor="end" class="tag muted">CATCH-ALL</text>
+  </g>
+
+  <!-- receivers -->
+  <g class="a4">
+    <rect x="680" y="340" width="240" height="120" rx="12" fill="#ff8a1f" fill-opacity=".10" stroke="#ff8a1f" stroke-opacity=".55"/>
+    <text x="704" y="372" font-size="15" font-weight="700">e-mail</text>
+    <text x="704" y="396" font-size="11" class="mono" style="fill:#ffc48a">human on call</text>
+    <text x="704" y="413" font-size="11" class="mono" style="fill:#ffc48a">text + html · MSK / UTC</text>
+    <text x="704" y="430" font-size="11" class="mono" style="fill:#ffc48a">runbook, dashboard, logs</text>
+    <text x="908" y="357" text-anchor="end" class="tag muted">SMTP</text>
+
+    <rect x="680" y="480" width="240" height="100" rx="12" fill="#ffb02e" fill-opacity=".10" stroke="#ffb02e" stroke-opacity=".55"/>
+    <text x="704" y="512" font-size="15" font-weight="700">alert-sink</text>
+    <text x="704" y="536" font-size="11" class="mono" style="fill:#ffd48a">/webhook · /timeline</text>
+    <text x="704" y="553" font-size="11" class="mono" style="fill:#ffd48a">alertsink_* metrics</text>
+    <text x="908" y="497" text-anchor="end" class="tag muted">DEMO</text>
+
+    <line x1="600" y1="374" x2="676" y2="374" stroke="#ff8a1f" stroke-width="2" class="flow" marker-end="url(#orange)"/>
+    <line x1="600" y1="432" x2="676" y2="432" stroke="#ff8a1f" stroke-width="2" class="flow" marker-end="url(#orange)"/>
+    <line x1="600" y1="490" x2="676" y2="490" stroke="#ffb02e" stroke-width="2" class="flow" marker-end="url(#amber)"/>
+    <line x1="600" y1="548" x2="676" y2="548" stroke="#ffb02e" stroke-width="2" class="flow" marker-end="url(#amber)"/>
+  </g>
+
+  <!-- self-watch panel -->
+  <g class="foot">
+    <rect x="60" y="614" width="840" height="112" rx="12" fill="#141b29" stroke="#232c3f"/>
+    <rect x="60" y="614" width="4" height="112" rx="2" fill="#3ddc84"/>
+    <text x="84" y="644" font-size="14" font-weight="700">The route watches itself</text>
+    <text x="84" y="672" font-size="12.5" class="muted">heartbeat, 3 rules: route silent for 5.5 h · sink up with zero events · scrape target gone</text>
+    <text x="84" y="694" font-size="12.5" class="muted">group guards: AlertPathRulesAbsent, LogsPipelineRulesAbsent — a missing rule group cannot stay silent</text>
+    <text x="84" y="716" font-size="12.5" class="muted">proof: a drill fails unless the event reaches /timeline as a firing to resolved pair</text>
+    <text x="40" y="752" font-size="12.5" class="muted">Two of the three heartbeat rules need 5.5 hours of silence, so they are covered by promtool tests, not by a live run.</text>
+  </g>
+</svg>

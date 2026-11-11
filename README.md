@@ -2,160 +2,258 @@
 
 [![CI](https://github.com/morgenvor/k8s-observability-lab/actions/workflows/ci.yml/badge.svg)](https://github.com/morgenvor/k8s-observability-lab/actions/workflows/ci.yml)
 
-**Мониторинг, который доказывает, что работает.**
+[Русский](README.ru.md) | **English**
 
-Пет-проект про эксплуатацию на Kubernetes: SLO, посчитанные по опыту клиента; алерты,
-которые действительно доходят до человека; логи, привязанные к инциденту; и
-инцидент-дриллы, у которых есть машинночитаемые доказательства.
+**Monitoring that proves it works.**
 
-Большинство мониторинговых стендов показывают, что метрики собираются. Этот проект
-отвечает на другой вопрос: **сработает ли алерт, дойдёт ли он до получателя и
-подтвердится ли восстановление — и чем именно это доказано.**
+A pet project about operating a Kubernetes service: SLOs measured from the client's
+side, alerts that are proven to arrive, logs tied to the incident window, and incident
+drills that leave machine-readable evidence.
 
-В текущей версии — 29 алертов и 20 записывающих правил, три дашборда и четыре
-инцидент-дрилла с машинночитаемыми доказательствами.
+Most monitoring demos show that metrics are being collected. This project answers a
+different question: **does the alert fire, does it reach the receiver, and is recovery
+confirmed — and what exactly proves it?**
 
-## Что умеет проект
+`k3s` · `Prometheus` · `Alertmanager` · `Grafana` · `Loki` · `Grafana Alloy` ·
+`Toxiproxy` · `Node.js` · `Helmfile` · `Kustomize` · `GitHub Actions`
 
-### SLO считаются по тому, что видит клиент
+> **State: v1.1.** Six `PrometheusRule` objects, 11 groups, 49 rules (29 alerts:
+> 25 `ticket`, 4 `page`; plus 20 recording rules), one Loki ruler rule, three
+> dashboards and four drills. The offline gates need no cluster, and every live claim
+> carries a date and its limits in [docs/verification.md](docs/verification.md). The
+> runbook, the evidence reports and the alert e-mail are in Russian.
 
-Нагрузка идёт через Toxiproxy, а исход и латентность меряет клиент — так же, как это
-делал бы реальный пользователь. Prometheus записывает SLI и burn rate по нескольким
-окнам, а алерты используют классическую мультиоконную схему: быстрый `page` требует
-превышения порога и в коротком, и в длинном окне, поэтому реагирует на реальный расход
-бюджета, а не на минутный всплеск.
+## What this proves
 
-### Алерт — это доставка, а не «firing»
+- **SLOs are measured from the client's side.** Load goes through Toxiproxy and the
+  client records the outcome, so latency and resets injected on the proxy appear
+  exactly as a user would feel them — the service's own metrics cannot see them.
+  Availability is 99 %, latency (share of requests under 300 ms) is 95 %, over a
+  three-day window.
+- **An alert is a delivery, not a `firing` state.** Routes are keyed by `severity`:
+  `page` and `critical` go to e-mail, everything else to a webhook sink that keeps a
+  journal. The mail branch does not exclude the sink, the `AlertSink.*` branch is
+  evaluated first with `continue: true`, and an explicit catch-all keeps an unknown
+  severity from disappearing silently.
+- **Logs are a second class of evidence.** Loki collects pod stdout through Alloy,
+  Grafana shows logs next to metrics, and one Loki ruler rule raises an alert from log
+  content. A `page` e-mail links the runbook, the dashboard and the logs of exactly the
+  incident window (±15 minutes).
+- **Drills instead of promises.** Four scenarios run against the live stand and write a
+  JSON timeline: events, reaction time, `firing`/`resolved` and the delivery record from
+  the sink. An alert that Prometheus fired but never delivered fails the drill.
+- **Gates fail on drift.** One command runs linters, application tests, chart rendering
+  with schema validation, `promtool check/test rules`, link and e-mail-template checks,
+  plus secret and address scans. The assertions test themselves with mutations, and CI
+  runs the same gates.
 
-Уведомления маршрутизируются по `severity`: `page` и `critical` уходят письмом,
-остальное — в webhook-приёмник, который хранит журнал доставленных событий. Ветка
-почты не исключает приёмник: `page` попадает и туда (это два уведомления разным
-получателям, а не дубль). Явный catch-all не даёт неизвестному `severity` исчезнуть
-молча. Алерты о поломке самого
-пути уведомлений (`AlertSink.*`) дополнительно уходят письмом, чтобы сигнал не умер
-вместе с приёмником. Отдельные heartbeat-правила следят за самим путём уведомлений:
-если маршрут замолчал дольше 5,5 часов, об этом узнают, даже когда метрики сервисов
-выглядят здоровыми.
+## Architecture
 
-### Логи — второй класс проверки
+Everything runs on two k3s nodes in two namespaces, `demo` and `monitoring`: the demo
+apps and the alert sink in the first, the monitoring stack and the alert route in the
+second.
 
-Loki собирает stdout подов через Alloy, Grafana показывает логи рядом с метриками, а
-правило Loki ruler умеет поднимать алерт по содержимому логов. В уведомление
-`page`-алерта SLO попадают ссылки на runbook, дашборд и логи ровно того окна, в
-котором случился инцидент.
+<p align="center">
+  <img src="docs/architecture.svg" width="100%" alt="Architecture: demo-load sends five requests per second through Toxiproxy to demo-api; Prometheus scrapes demo-api metrics, Alloy reads its JSON logs through the Kubernetes API into Loki; Grafana queries both stores; Prometheus and the Loki ruler send alerts to Alertmanager, which routes page and critical to e-mail and everything else to alert-sink; the sink's own logs and metrics return to Alloy and Prometheus.">
+</p>
 
-### Дриллы вместо обещаний
-
-Четыре сценария — ошибки, задержка, OOM и сломанная readiness-проба — запускаются на
-живом стенде и заканчиваются JSON-доказательством: таймлайн событий, время реакции,
-факт `firing`/`resolved` и подтверждение доставки уведомления в приёмник. Если алерт не
-дошёл, дрилл считается провальным, даже если Prometheus его видел.
-
-### Ворота качества
-
-Перед каждым изменением работает один набор проверок: линтеры, юнит-тесты сервисов,
-рендер чартов с проверкой схем, `promtool check/test rules`, проверка ссылок и шаблона
-письма, сканы секретов и адресов. Те же ворота запускаются в CI. Правила, маршрут и
-дашборды проверяются не «на глаз», а ассертами, у которых есть самопроверки.
-
-## Как это выглядит
-
-Скриншоты сняты на живом стенде; кадр `demo-red` — в пределах часа после дрилла
-`errors`, на нём виден всплеск ошибок, восстановление и латентность SLO (бюджет
-ошибок — на втором кадре).
-
-![Дашборд demo — RED и латентность](docs/images/demo-red.png)
-
-*RPS, доля ошибок, p95 и latency SLO глазами клиента и сервера; внизу — живые логи
-namespace из Loki.*
-
-![Дашборд demo — SLI/SLO и burn rate](docs/images/slo-demo.png)
-
-*Остаток бюджета, текущий SLI за три дня, burn rate по окнам и разбивка по SLO.*
-
-![Письмо по page-алерту](docs/images/alert-email.png)
-
-*Письмо по `page`-алерту: статус, severity, ссылки на runbook, дашборд, логи и
-Alertmanager, время в MSK и UTC. Кадр снят на учебной пробе.*
-
-## Как это устроено
-
-```mermaid
-flowchart LR
-  load["demo-load<br/>нагрузка"] --> toxiproxy["toxiproxy<br/>инъекция сбоев"]
-  toxiproxy --> api["demo-api<br/>RED-метрики + JSON-логи"]
-  api -->|"/metrics"| prometheus["Prometheus<br/>SLI, burn rate"]
-  api -->|"stdout через API"| alloy["Alloy<br/>сбор логов"]
-  alloy --> loki["Loki"]
-  prometheus --> grafana["Grafana"]
-  loki --> grafana
-  prometheus --> alertmanager["Alertmanager<br/>маршрут по severity"]
-  loki -->|"Loki ruler"| alertmanager
-  alertmanager -->|"AlertSink.* (continue)"| email
-  alertmanager -->|"page, critical"| email["e-mail"]
-  alertmanager -->|"остальное"| sink["alert-sink<br/>журнал доставки"]
-  sink -->|"stdout через API"| alloy
-```
-
-| Слой | Чем |
+| Layer | What runs there |
 |---|---|
-| Оркестрация | k3s |
-| Метрики и алерты | Prometheus, Alertmanager (kube-prometheus-stack) |
-| Визуализация | Grafana |
-| Логи | Loki + Grafana Alloy |
-| Инъекция сбоев | Toxiproxy |
-| Демо-сервисы | Node.js: `demo-api`, `demo-load`, `alert-sink` |
-| Доставка | Helmfile и Kustomize |
-| Проверки | GitHub Actions и собственные ассерты проекта |
+| Orchestration | k3s, two nodes, Traefik ingress built in |
+| Metrics and alerts | Prometheus and Alertmanager from kube-prometheus-stack `92.14.1` |
+| Visualisation | Grafana, three dashboards provisioned from ConfigMaps |
+| Logs | Loki `3.6.11` (single binary, 5 GiB PVC) and Grafana Alloy `1.21.3` as a DaemonSet |
+| Fault injection | Toxiproxy between the generator and the service |
+| Demo services | Node.js: `demo-api`, `demo-load`, `alert-sink` |
+| Delivery | Helmfile for third-party charts, Kustomize for the project's own manifests |
+| Checks | GitHub Actions plus the project's own assertions |
 
-## Кому полезно
+`demo-load` keeps 5 rps through `toxiproxy`; `demo-api` answers `/work`, exposes
+`/metrics` and writes one JSON line per request. Prometheus records 20 SLI and burn-rate
+series, Alloy reads pod logs through the Kubernetes API (no hostPath, no root) and
+writes them to Loki, Grafana queries both stores. Alerts go to Alertmanager, which
+routes them as described below. The sink sits inside the loop: its stdout is collected
+like any pod's and its metrics are scraped like any app's.
 
-- SRE и DevOps-инженерам, которым нужен рабочий пример SLO-алертинга и маршрута
-  уведомлений, а не набор YAML без проверок;
-- тем, кто готовит портфолио: здесь есть воспроизводимые доказательства, а не
-  утверждение «настроено и работает»;
-- командам, которым нужен переносимый шаблон дриллов и разбора инцидентов.
+Four choices shape the numbers, and none of them can be read from a single YAML file:
 
-## Быстрый старт
+- **Only `page` and `ticket`.** The chart ships an `InfoInhibitor`, which silences any
+  single `info` alert in a namespace, so an `info` rule would look healthy by staying
+  quiet. Every project rule is `page` or `ticket`, and rules that seem informational
+  are `ticket` on purpose.
+- **Alloy drops lines older than 50 minutes** before writing to Loki: after a pod
+  restart logs are re-read from the beginning, and Loki rejects chunks older than one
+  hour. Losses are counted in `AlloyDroppedLogs` and `AlloyOldLogsDropped` instead of
+  disappearing.
+- **No arithmetic in Alertmanager templates.** The log link is built from
+  `time` + `time.window`, because `toDuration` does not exist in the template engine;
+  the ±15-minute incident window is therefore computed by Grafana.
+- **`up == 0` and `absent(up)` are separate rules.** A target that stopped answering
+  and a target that was never discovered are different failures with different fixes.
 
-Кластер не нужен, чтобы увидеть, как проект проверяет сам себя. Нужны `git`, `python3`
-с PyYAML и `npm`; для `--smoke` — ещё `docker`.
+## Alert path
+
+<p align="center">
+  <img src="docs/alert-path.svg" width="100%" alt="Alert route: Prometheus and the Loki ruler send alerts to Alertmanager, which evaluates four child routes in order — AlertSink alerts and page or critical severity go to e-mail with continue true, ticket, info, warning or none go to alert-sink, and a catch-all without matchers sends anything else to alert-sink. Three heartbeat rules and two group guards watch the route itself.">
+</p>
+
+| # | Matcher | Receiver | Why |
+|---|---|---|---|
+| 1 | `alertname =~ "AlertSink.*"` | e-mail | evaluated first with `continue: true`: news about a broken route must not travel only through the broken route |
+| 2 | `severity =~ "page\|critical"` | e-mail | `continue: true`, so the sink also gets the event — two recipients for different purposes, not a duplicate |
+| 3 | `severity =~ "ticket\|info\|warning\|none"` | alert-sink | the working-hours journal: `/timeline` and the `alertsink_*` metrics |
+| 4 | *no matchers* | alert-sink | catch-all: a new, misspelled or missing severity cannot fall into a null receiver |
+
+Three `ticket` rules watch the path itself, because the chart has no rule that would
+notice a silent route: route silent for 5.5 hours, sink up with zero events, and the
+sink's scrape target gone. Two more rules guard the guard groups: `AlertPathRulesAbsent` and
+`LogsPipelineRulesAbsent` fire if their rule groups vanish — a `PrometheusRule` that
+was not applied or lost its `release` label otherwise looks like "no problem".
+
+Delivery is gated at deploy time as well. `scripts/deploy.sh` renders an overlay with
+real addresses and refuses to apply placeholder `example.invalid` values over live ones
+unless explicitly allowed, and it checks the whole route tree in the active
+Alertmanager configuration — addresses without a tree are only half the truth.
+
+## How it looks
+
+The screenshots come from the live stand. The `demo-red` frame was taken within an hour
+of the `errors` drill: the error spike, the recovery and the latency SLO are visible,
+the error budget is on the second frame.
+
+![Dashboard demo — RED and latency](docs/images/demo-red.png)
+
+*RPS, error ratio, p95 and the latency SLO as seen by the client and by the server;
+below, live namespace logs from Loki.*
+
+![Dashboard demo — SLI/SLO and burn rate](docs/images/slo-demo.png)
+
+*Remaining error budget, current SLI over three days, burn rate by window and the
+per-SLO breakdown.*
+
+![E-mail for a page alert](docs/images/alert-email.png)
+
+*A `page` e-mail: status, severity, links to the runbook, the dashboard, the incident
+log window and Alertmanager, time in MSK and UTC. The frame is from a training probe.*
+
+## Quick start
+
+No cluster is needed to see the project check itself. You need `git`, `python3` with
+PyYAML and `npm`; `--smoke` also needs Docker.
 
 ```bash
 git clone https://github.com/morgenvor/k8s-observability-lab.git
 cd k8s-observability-lab
 ./scripts/bootstrap-tools.sh   # kubectl, helm, helmfile, kubeconform, promtool, alloy
-./scripts/check.sh             # линтеры, тесты, рендер, promtool, сканы
+./scripts/check.sh --strict    # linters, tests, render, promtool, scans
 ```
 
-`./scripts/check.sh --smoke` дополнительно собирает образы и запускает сервисы в docker.
-Живой стенд, деплой, откат и диагностика — в [runbook](docs/runbook.md).
+`./scripts/check.sh --smoke` also builds the images and runs the three services in
+Docker. The live stand, deployment, rollback and diagnostics are in the
+[runbook](docs/runbook.md).
 
-## Документация
+## Quality gates
 
-| Файл | О чём |
+`./scripts/check.sh` is the single set of offline gates, and it is the same job CI runs
+(`ci.yml`, with `--strict --smoke`). What it actually checks:
+
+- both render paths — Helmfile releases and Kustomize resources — validated with
+  `kubeconform`, plus semantic assertions on Loki, Alloy, ingress and PVC settings;
+- the alert route as a tree, the `AlertmanagerConfig` wiring, the Loki ruler path and
+  rule placement (labels, namespace, kustomization membership);
+- `promtool check rules` and `promtool test rules`: five fixture sets, every one of the
+  29 alerts has a case that fires, and the medium/slow burn cases assert that exactly
+  one alert fires;
+- the e-mail template rendered with the Go standard library engine and a re-created
+  Alertmanager `FuncMap`: required fields, the incident window, exactly one stand link;
+- dashboards: JSON validity, panel queries matched against application sources and
+  recording rules, and self-checks that fail when the checker itself is mutated;
+- ServiceMonitor selectors, the deploy overlay parity, `shellcheck`, drill signal
+  tests, and scans for secrets and personal addresses (all hits are
+  `example.invalid`/`example.com`).
+
+What the gates do not do: they cannot see a screenshot, they do not prove that a
+notification reached a mailbox, and under `--strict` any skipped step is a failure
+rather than a silent pass.
+
+## Drills and evidence
+
+| Drill | Injection | Expected signal | Measured reaction |
+|---|---|---|---|
+| `errors` | `reset_peer` on the Toxiproxy proxy: every connection is dropped | availability SLI collapses, `SloDemoAvailabilityBurnFast` (`page`) | 11.5 min to `page` |
+| `latency` | 400 ± 50 ms of network latency on the proxy | p95 above 300 ms while requests still succeed, `SloDemoLatencyBurnFast` (`page`) | 26 min to `page` |
+| `readiness` | readiness probe pointed at `/nope`, pods recreated | zero ready endpoints, availability `page` | 19.3 min to `page` |
+| `oomkill` | a 200 MiB write inside a `192Mi` container | `KubePodOOMKilled` (`ticket`) and the event in `/timeline` | 102 s |
+
+Each run writes `evidence/<date>-<drill>.json` in the `drill-evidence/v1` schema and a
+console transcript. A rerun does not overwrite proof: the previous file is moved to
+`evidence/attempts/` with an `-attemptN` suffix first. The scenarios, preconditions and
+cleanup are described in [docs/drills.md](docs/drills.md).
+
+## Repository layout
+
+| Path | Purpose |
 |---|---|
-| [docs/runbook.md](docs/runbook.md) | процедуры: инструменты, образы, deploy/rollback, UI, логи, маршрут уведомлений, реакция на алерты |
-| [docs/drills.md](docs/drills.md) | четыре дрилла: что инъецируется, что должен увидеть пользователь, схема evidence |
-| [docs/verification.md](docs/verification.md) | что и чем проверено: дата, команда, результат; чего живьём ещё нет |
-| [evidence/](evidence/) | JSON-доказательства дриллов и транскрипты прогонов |
+| [`helmfile.yaml`](helmfile.yaml), [`helm/values/`](helm/values) | third-party charts with pinned versions and the project's values |
+| [`kustomization.yaml`](kustomization.yaml), [`deploy/`](deploy) | own manifests: apps, Toxiproxy, ServiceMonitors, dashboards, Loki rules, `AlertmanagerConfig` |
+| [`rules/`](rules) | six `PrometheusRule` objects and `promtool` fixtures in [`rules/tests/`](rules/tests) |
+| [`app/`](app) | `demo-api`, `demo-load`, `alert-sink` — Node.js with unit tests |
+| [`drills/`](drills), [`evidence/`](evidence) | four drill scripts with shared library, and their JSON transcripts |
+| [`scripts/`](scripts) | `check.sh` and its assertions in `scripts/checks/`, plus bootstrap, deploy, rollback, image import and smoke |
+| [`docs/`](docs) | runbook, drills, verification, and the SVG diagrams used above |
+| [`.github/workflows/ci.yml`](.github/workflows/ci.yml) | offline gates in CI |
 
-## Честные границы
+## What is not verified
 
-- Стенд — две ноды k3s в домашней лабе: registry нет, TLS нет; Prometheus и
-  Alertmanager открыты без аутентификации, Grafana — с логином. Это осознанные
-  ограничения лаборатории, а не недосмотр.
-- Часть сценариев пока подтверждена только `promtool`, а не живьём: slow-burn алерт
-  требует трёх суток данных, heartbeat-тишина — 5,5 часов, падение вычисления Loki
-  ruler и настоящий 5xx в логах требуют отдельных инъекций. Полный список — в
-  [docs/verification.md](docs/verification.md).
-- E-mail-ветка зависит от SMTP-egress стенда: при закрытом порту письма не уходят,
-  хотя конфигурация остаётся валидной.
+- **Offline only:** the slow-burn alert (1x over three days), 5.5 hours of route
+  silence, a failing ruler evaluation, and a real 5xx line from `demo-api` — the only
+  source of 5xx is `/ready` draining on shutdown, which the rule excludes on purpose.
+  The missing-scrape-target guard was confirmed live on 2026-11-10; the other two
+  heartbeat rules are covered by `promtool` tests only.
+- **The lab is not production.** There is no registry (images are imported on each node
+  and tagged with the short git SHA), no TLS, Prometheus and Alertmanager are open
+  without authentication, Grafana requires a login, and UI hosts are `*.lab.internal`
+  placeholders that you map in `/etc/hosts`.
+- **E-mail depends on SMTP egress.** If the port is closed the configuration stays
+  valid and the mail simply does not leave the stand.
+- **Screenshots are not checked by gates.** They are from the live stand, and the
+  e-mail frame is a training probe rather than an incident.
 
-## Лицензия
+## Requirements
 
-MIT — см. [LICENSE](LICENSE). Код и конфигурацию можно переиспользовать; ссылка на
-проект приветствуется, но не требуется.
+- Local: `git`, `python3` with PyYAML, `npm`; Docker for `--smoke`; x86_64 only — the
+  bootstrap script installs amd64 binaries. The e-mail template check uses the Go
+  toolchain when it is installed and is skipped (a failure under `--strict`) otherwise.
+- Live stand: two k3s nodes with a default StorageClass and Traefik (built into k3s), an
+  environment overlay for alert addresses, SMTP host and `GRAFANA_BASE_URL`, and a
+  Secret that holds the SMTP password.
 
-Если нужен стенд, который не боится сбоев и умеет это доказывать, — начните с
-[runbook](docs/runbook.md) и [дриллов](docs/drills.md).
+## Documentation
+
+| File | What it covers |
+|---|---|
+| [docs/runbook.md](docs/runbook.md) | procedures: tools, images, deploy/rollback, UI access, logs, the notification route, reaction to each alert |
+| [docs/drills.md](docs/drills.md) | the four drills: injection, what a user should see, evidence schema, typical failures |
+| [docs/verification.md](docs/verification.md) | what is proven, with date, command and result; what is still only covered offline |
+| [evidence/](evidence) | drill JSON timelines and console transcripts |
+| [README.ru.md](README.ru.md) | the Russian version of this file |
+
+## References
+
+- [Alerting on SLOs](https://sre.google/workbook/alerting-on-slos/) — multi-window,
+  multi-burn-rate alerts
+- [Prometheus alerting rules](https://prometheus.io/docs/prometheus/latest/configuration/alerting_rules/)
+- [Alertmanager configuration](https://prometheus.io/docs/alerting/latest/configuration/)
+- [kube-prometheus-stack](https://github.com/prometheus-community/helm-charts/tree/main/charts/kube-prometheus-stack)
+- [Grafana Loki](https://grafana.com/docs/loki/latest/) · [Grafana Alloy](https://grafana.com/docs/alloy/latest/)
+- [Toxiproxy](https://github.com/Shopify/toxiproxy) · [Helmfile](https://helmfile.readthedocs.io/) · [k3s](https://docs.k3s.io/)
+
+## License
+
+MIT — see [LICENSE](LICENSE). The code and configuration can be reused; a link back is
+welcome but not required.
+
+## Feedback
+
+Open an issue in
+[morgenvor/k8s-observability-lab](https://github.com/morgenvor/k8s-observability-lab/issues).

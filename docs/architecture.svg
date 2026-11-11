@@ -1,0 +1,160 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 740" width="960" height="740" role="img" aria-labelledby="t d">
+  <title id="t">Lab architecture: traffic, telemetry and alert delivery in one loop</title>
+  <desc id="d">demo-load sends five requests per second through Toxiproxy to demo-api. demo-api exposes metrics that Prometheus scrapes, and writes JSON logs that Alloy reads through the Kubernetes API into Loki. Grafana queries Prometheus and Loki. Prometheus and the Loki ruler send alerts to Alertmanager, which routes page and critical to e-mail and everything else to alert-sink. alert-sink writes its own logs and metrics, which return to Alloy and Prometheus.</desc>
+  <style>
+    text { font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif; fill: #e6ebf5; }
+    .muted { fill: #8b96ad; }
+    .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; }
+    .tag { font-size: 9px; font-weight: 600; letter-spacing: .08em; }
+    .flow { stroke-dasharray: 5 8; animation: flow 1.6s linear infinite; }
+    @keyframes flow { to { stroke-dashoffset: -26; } }
+    .t0, .t1, .t2, .t3, .t4, .t5, .t6, .t7, .foot { transform-box: fill-box; transform-origin: center; }
+    @keyframes t0 { 0%,2.0% { opacity: 0; transform: translateY(6px); } 4.5%,94% { opacity: 1; transform: translateY(0); } 100% { opacity: 0; transform: translateY(0); } } .t0 { animation: t0 12s infinite; }
+    @keyframes t1 { 0%,6.0% { opacity: 0; transform: translateY(6px); } 8.5%,94% { opacity: 1; transform: translateY(0); } 100% { opacity: 0; transform: translateY(0); } } .t1 { animation: t1 12s infinite; }
+    @keyframes t2 { 0%,10.0% { opacity: 0; transform: translateY(6px); } 12.5%,94% { opacity: 1; transform: translateY(0); } 100% { opacity: 0; transform: translateY(0); } } .t2 { animation: t2 12s infinite; }
+    @keyframes t3 { 0%,14.0% { opacity: 0; transform: translateY(6px); } 16.5%,94% { opacity: 1; transform: translateY(0); } 100% { opacity: 0; transform: translateY(0); } } .t3 { animation: t3 12s infinite; }
+    @keyframes t4 { 0%,18.0% { opacity: 0; transform: translateY(6px); } 20.5%,94% { opacity: 1; transform: translateY(0); } 100% { opacity: 0; transform: translateY(0); } } .t4 { animation: t4 12s infinite; }
+    @keyframes t5 { 0%,22.0% { opacity: 0; transform: translateY(6px); } 24.5%,94% { opacity: 1; transform: translateY(0); } 100% { opacity: 0; transform: translateY(0); } } .t5 { animation: t5 12s infinite; }
+    @keyframes t6 { 0%,26.0% { opacity: 0; transform: translateY(6px); } 28.5%,94% { opacity: 1; transform: translateY(0); } 100% { opacity: 0; transform: translateY(0); } } .t6 { animation: t6 12s infinite; }
+    @keyframes t7 { 0%,30.0% { opacity: 0; transform: translateY(6px); } 32.5%,94% { opacity: 1; transform: translateY(0); } 100% { opacity: 0; transform: translateY(0); } } .t7 { animation: t7 12s infinite; }
+    @keyframes foot { 0%,34.0% { opacity: 0; } 36.5%,94% { opacity: 1; } 100% { opacity: 0; } } .foot { animation: foot 12s infinite; }
+    @media (prefers-reduced-motion: reduce) { * { animation: none !important; } .t0,.t1,.t2,.t3,.t4,.t5,.t6,.t7,.foot { opacity: 1; } }
+  </style>
+  <defs>
+    <marker id="green" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 Z" fill="#3ddc84"/>
+    </marker>
+    <marker id="cyan" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 Z" fill="#3ec7ff"/>
+    </marker>
+    <marker id="purple" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 Z" fill="#b58cff"/>
+    </marker>
+    <marker id="orange" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 Z" fill="#ff8a1f"/>
+    </marker>
+    <marker id="amber" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 Z" fill="#ffb02e"/>
+    </marker>
+  </defs>
+
+  <rect width="960" height="740" rx="20" fill="#0f1420"/>
+  <rect x="1" y="1" width="958" height="738" rx="19" fill="none" stroke="#232c3f"/>
+  <text x="40" y="52" font-size="28" font-weight="800">From a request to a delivered alert</text>
+  <text x="40" y="78" font-size="15" class="muted">Client-side SLI, pod logs and a routed alert — one loop on two k3s nodes</text>
+  <text x="920" y="78" text-anchor="end" font-size="12" class="mono muted">namespaces: demo · monitoring</text>
+
+  <!-- 01 traffic -->
+  <g class="t0">
+    <rect x="60" y="130" width="190" height="84" rx="12" fill="#3ddc84" fill-opacity=".10" stroke="#3ddc84" stroke-opacity=".55"/>
+    <text x="84" y="162" font-size="15" font-weight="700">demo-load</text>
+    <text x="84" y="186" font-size="11" class="mono" style="fill:#9ff0c4">5 rps · client-side</text>
+    <text x="84" y="203" font-size="11" class="mono" style="fill:#9ff0c4">outcome and latency</text>
+    <text x="238" y="147" text-anchor="end" class="tag muted">DEMO</text>
+  </g>
+
+  <!-- 02 fault injection -->
+  <g class="t1">
+    <rect x="280" y="130" width="160" height="84" rx="12" fill="#ff8a1f" fill-opacity=".10" stroke="#ff8a1f" stroke-opacity=".55"/>
+    <text x="304" y="162" font-size="15" font-weight="700">toxiproxy</text>
+    <text x="304" y="186" font-size="11" class="mono" style="fill:#ffc48a">latency · reset_peer</text>
+    <text x="304" y="203" font-size="11" class="mono" style="fill:#ffc48a">fault injection</text>
+    <text x="428" y="147" text-anchor="end" class="tag muted">DEMO</text>
+    <line x1="250" y1="172" x2="278" y2="172" stroke="#3ddc84" stroke-width="2" class="flow" marker-end="url(#green)"/>
+    <text x="264" y="163" text-anchor="middle" font-size="9" class="muted">5 rps</text>
+  </g>
+
+  <!-- 03 service -->
+  <g class="t2">
+    <rect x="470" y="130" width="190" height="84" rx="12" fill="#3ddc84" fill-opacity=".10" stroke="#3ddc84" stroke-opacity=".55"/>
+    <text x="494" y="162" font-size="15" font-weight="700">demo-api</text>
+    <text x="494" y="186" font-size="11" class="mono" style="fill:#9ff0c4">/work · /ready</text>
+    <text x="494" y="203" font-size="11" class="mono" style="fill:#9ff0c4">/metrics · JSON logs</text>
+    <text x="648" y="147" text-anchor="end" class="tag muted">DEMO</text>
+    <line x1="440" y1="172" x2="468" y2="172" stroke="#3ddc84" stroke-width="2" class="flow" marker-end="url(#green)"/>
+  </g>
+
+  <!-- 04 telemetry -->
+  <g class="t3">
+    <rect x="470" y="280" width="190" height="84" rx="12" fill="#3ec7ff" fill-opacity=".10" stroke="#3ec7ff" stroke-opacity=".55"/>
+    <text x="494" y="312" font-size="15" font-weight="700">Prometheus</text>
+    <text x="494" y="336" font-size="11" class="mono" style="fill:#a8e4ff">SLI + burn rate</text>
+    <text x="494" y="353" font-size="11" class="mono" style="fill:#a8e4ff">20 recording rules</text>
+    <text x="648" y="297" text-anchor="end" class="tag muted">MONITORING</text>
+    <line x1="565" y1="214" x2="565" y2="278" stroke="#3ec7ff" stroke-width="2" class="flow" marker-end="url(#cyan)"/>
+    <text x="573" y="250" font-size="10" class="mono muted">/metrics</text>
+
+    <rect x="280" y="280" width="160" height="84" rx="12" fill="#3ec7ff" fill-opacity=".10" stroke="#3ec7ff" stroke-opacity=".55"/>
+    <text x="304" y="312" font-size="15" font-weight="700">Alloy</text>
+    <text x="304" y="336" font-size="11" class="mono" style="fill:#a8e4ff">logs via the API</text>
+    <text x="304" y="353" font-size="11" class="mono" style="fill:#a8e4ff">DaemonSet, no root</text>
+    <text x="428" y="297" text-anchor="end" class="tag muted">MONITORING</text>
+    <path d="M470,200 C445,215 430,245 420,278" fill="none" stroke="#3ec7ff" stroke-width="2" class="flow" marker-end="url(#cyan)"/>
+      </g>
+
+  <!-- 05 log store -->
+  <g class="t4">
+    <rect x="280" y="400" width="160" height="84" rx="12" fill="#3ec7ff" fill-opacity=".10" stroke="#3ec7ff" stroke-opacity=".55"/>
+    <text x="304" y="432" font-size="15" font-weight="700">Loki</text>
+    <text x="304" y="456" font-size="11" class="mono" style="fill:#a8e4ff">single binary</text>
+    <text x="304" y="473" font-size="11" class="mono" style="fill:#a8e4ff">5Gi PVC · ruler</text>
+    <text x="428" y="417" text-anchor="end" class="tag muted">MONITORING</text>
+    <line x1="360" y1="364" x2="360" y2="398" stroke="#3ec7ff" stroke-width="2" class="flow" marker-end="url(#cyan)"/>
+    <text x="368" y="386" font-size="10" class="mono muted">logs</text>
+  </g>
+
+  <!-- 06 dashboards -->
+  <g class="t5">
+    <rect x="700" y="280" width="220" height="120" rx="12" fill="#b58cff" fill-opacity=".10" stroke="#b58cff" stroke-opacity=".55"/>
+    <text x="724" y="312" font-size="15" font-weight="700">Grafana</text>
+    <text x="724" y="336" font-size="11" class="mono" style="fill:#d9c6ff">3 dashboards: demo-red,</text>
+    <text x="724" y="353" font-size="11" class="mono" style="fill:#d9c6ff">slo-demo, notifications</text>
+    <text x="724" y="370" font-size="11" class="mono" style="fill:#d9c6ff">logs next to metrics</text>
+    <text x="908" y="297" text-anchor="end" class="tag muted">MONITORING</text>
+    <line x1="660" y1="322" x2="698" y2="322" stroke="#3ec7ff" stroke-width="2" class="flow" marker-end="url(#cyan)"/>
+    <path d="M440,442 C545,450 630,412 698,384" fill="none" stroke="#3ec7ff" stroke-width="2" class="flow" marker-end="url(#cyan)"/>
+    <text x="452" y="472" font-size="10" class="mono muted">logs</text>
+  </g>
+
+  <!-- 07 alerting core -->
+  <g class="t6">
+    <rect x="470" y="520" width="190" height="100" rx="12" fill="#b58cff" fill-opacity=".10" stroke="#b58cff" stroke-opacity=".55"/>
+    <text x="494" y="552" font-size="15" font-weight="700">Alertmanager</text>
+    <text x="494" y="576" font-size="11" class="mono" style="fill:#d9c6ff">route by severity</text>
+    <text x="494" y="593" font-size="11" class="mono" style="fill:#d9c6ff">groupBy alertname, service</text>
+    <text x="494" y="610" font-size="11" class="mono" style="fill:#d9c6ff">resolved is sent too</text>
+    <text x="648" y="537" text-anchor="end" class="tag muted">MONITORING</text>
+    <circle cx="565" cy="432" r="6" fill="#0f1420"/>
+    <line x1="565" y1="364" x2="565" y2="518" stroke="#b58cff" stroke-width="2" class="flow" marker-end="url(#purple)"/>
+    <text x="557" y="502" text-anchor="end" font-size="10" class="mono muted">firing / resolved</text>
+    <path d="M360,484 V556 H468" fill="none" stroke="#b58cff" stroke-width="2" class="flow" marker-end="url(#purple)"/>
+    <text x="368" y="507" font-size="10" class="mono muted">ruler rule</text>
+  </g>
+
+  <!-- 08 receivers -->
+  <g class="t7">
+    <rect x="730" y="520" width="190" height="84" rx="12" fill="#ff8a1f" fill-opacity=".10" stroke="#ff8a1f" stroke-opacity=".55"/>
+    <text x="754" y="552" font-size="15" font-weight="700">e-mail</text>
+    <text x="754" y="576" font-size="11" class="mono" style="fill:#ffc48a">page · critical</text>
+    <text x="754" y="593" font-size="11" class="mono" style="fill:#ffc48a">AlertSink.* first</text>
+    <text x="908" y="537" text-anchor="end" class="tag muted">SMTP</text>
+    <line x1="660" y1="548" x2="728" y2="548" stroke="#ff8a1f" stroke-width="2" class="flow" marker-end="url(#orange)"/>
+    <text x="694" y="568" text-anchor="middle" font-size="9" class="muted">continue</text>
+
+    <rect x="60" y="560" width="190" height="90" rx="12" fill="#ffb02e" fill-opacity=".10" stroke="#ffb02e" stroke-opacity=".55"/>
+    <text x="84" y="592" font-size="15" font-weight="700">alert-sink</text>
+    <text x="84" y="616" font-size="11" class="mono" style="fill:#ffd48a">/webhook · /timeline</text>
+    <text x="84" y="633" font-size="11" class="mono" style="fill:#ffd48a">alertsink_* metrics</text>
+    <text x="238" y="577" text-anchor="end" class="tag muted">DEMO</text>
+    <line x1="468" y1="600" x2="252" y2="600" stroke="#ffb02e" stroke-width="2" class="flow" marker-end="url(#amber)"/>
+    <text x="360" y="591" text-anchor="middle" font-size="9.5" class="muted">ticket · info · warning · none · unknown</text>
+    <path d="M155,560 V240 H320 V278" fill="none" stroke="#3ec7ff" stroke-width="2" class="flow" marker-end="url(#cyan)"/>
+    <text x="163" y="420" font-size="10" class="mono muted">stdout</text>
+    <text x="163" y="436" font-size="10" class="mono muted">via API</text>
+  </g>
+
+  <g class="foot">
+    <text x="40" y="690" font-size="12.5" class="muted">The alert sink sits inside the loop: its stdout is collected like any pod's, its metrics are scraped like any app's.</text>
+    <text x="40" y="712" font-size="12.5" class="muted">Six PrometheusRule objects (49 rules, 11 groups) plus one Loki ruler rule; the route lives in a single AlertmanagerConfig.</text>
+  </g>
+</svg>
