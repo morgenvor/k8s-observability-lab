@@ -66,7 +66,7 @@ grafana:
     limits:
       cpu: 500m
       memory: 768Mi
-  # 2026-11-04 (фаза 5): datasource Loki. Ключ принадлежит чарту kube-prometheus-stack,
+  # 2026-11-04: datasource Loki. Ключ принадлежит чарту kube-prometheus-stack,
   # а не subchart grafana: templates/grafana/configmaps-datasources.yaml вставляет
   # элементы списка как есть в datasources: ConfigMap
   # `monitoring-kube-prometheus-grafana-datasource`, который читает sidecar Grafana.
@@ -110,7 +110,7 @@ alertmanager:
   enabled: true
   alertmanagerSpec:
     retention: 24h
-    # 2026-11-04 (фаза 4): обязательно, иначе AlertmanagerConfig из monitoring
+    # 2026-11-04: обязательно, иначе AlertmanagerConfig из monitoring
     # получает матчер namespace="monitoring" (дефолт operator v0.94.2 —
     # OnNamespace), и алерты из demo в наш webhook не попадут. Проверяется
     # сгенерированным конфигом: kubectl -n monitoring get secret
@@ -174,8 +174,8 @@ nodeExporter:
 # 127.0.0.1, поэтому эндпоинтов у Service чарта нет. Следствие без этого блока:
 # `absent(up{job="kube-controller-manager"})` и родственные выражения истинны всегда,
 # и KubeControllerManagerDown / KubeSchedulerDown / KubeProxyDown (severity: critical)
-# горят вечно. Их шум доходил до alert-sink и мешал доказательствам дриллов (фаза 6)
-# и критерию приёмки «нет незапланированных алертов» (фаза 7).
+# горят вечно. Их шум доходил до alert-sink и мешал доказательствам дриллов и
+# критерию «нет незапланированных алертов».
 # Выключаем именно эти три компонента: их метрик у нас никогда не было (`up`-серий
 # не существовало), терять нечего. Проверяется офлайн-рендером: исчезают 3
 # ServiceMonitor, 3 Service, 4 объекта PrometheusRule (6 алертов) и 3 пустых дашборда.

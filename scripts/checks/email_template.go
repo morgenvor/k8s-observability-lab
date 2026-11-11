@@ -289,7 +289,7 @@ func main() {
 	)
 	requireAbsent("html (page)", pageHTML, `href=""`, "{{", "}}")
 	// Ровно одна ссылка на сам стенд: «Alertmanager» в блоке ссылок и подвал «Стенд: …»
-	// дублировали друг друга в письме владельца (замечание 2026-11-10) — считаем href.
+	// дублировали друг друга в письме получателя (замечание 2026-11-10) — считаем href.
 	if n := strings.Count(pageHTML, `href="http://alertmanager.example.com"`); n != 1 {
 		fail("html (page): ссылок на Alertmanager %d, ожидалась ровно одна — дубль вёрнулся", n)
 	}

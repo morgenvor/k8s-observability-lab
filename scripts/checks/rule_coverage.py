@@ -7,7 +7,7 @@
 выражение, которое никогда не станет истинным, выглядит как зелёный тест.
 
 Опечатка в `severity` не ломает ни promtool, ни рендер, но уводит уведомление в
-catch-all. Своё соглашение — в `AGENTS.md`, раздел «Алерты»: `severity ∈ {page, ticket}`,
+catch-all. Соглашение проекта: `severity ∈ {page, ticket}`,
 `info` не ставим, потому что чартовый `InfoInhibitor` глушит одиночный info.
 
 Использование: rule_coverage.py <каталог-rulefiles> <каталог-тестов>
@@ -92,7 +92,7 @@ def main():
             )
             fail(
                 f"{name}: severity={severity!r}, ожидалось одно из {sorted(SEVERITIES)}."
-                f"{hint} (AGENTS, раздел «Алерты»)"
+                f"{hint} (соглашение проекта)"
             )
         if not rule.get("for"):
             fail(f"{name}: не задан `for` — алерт срабатывает мгновенно, без окна на флап")

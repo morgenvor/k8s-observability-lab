@@ -35,7 +35,7 @@ spec:
       interval: 30s
       scrapeTimeout: 10s
 ---
-# 2026-11-04 (фаза 4): sink тоже цель Prometheus, иначе метрики доставки
+# 2026-11-04: sink тоже цель Prometheus, иначе метрики доставки
 # alertsink_* живут только в самом сервисе, а пропажу sink не видит ни TargetDown,
 # ни дашборд. job у цели = alert-sink (из имени ServiceMonitor), а не demo-*.
 apiVersion: monitoring.coreos.com/v1

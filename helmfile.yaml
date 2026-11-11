@@ -1,6 +1,6 @@
 # Сторонние чарты проекта в одной точке. Свои манифесты (deploy/, rules/) — kustomize,
 # см. kustomization.yaml. Версии чартов пинятся здесь; смена версии — отдельный шаг
-# с записью в CHANGELOG.md, а не «заодно обновим».
+# а не «заодно обновим».
 repositories:
   - name: prometheus-community
     url: https://prometheus-community.github.io/helm-charts
@@ -18,7 +18,7 @@ releases:
     values:
       - helm/values/kps.yaml
 
-  # Логи (фаза 5): Loki SingleBinary на своём PVC 5Gi и Alloy DaemonSet, который читает
+  # Логи: Loki SingleBinary на своём PVC 5Gi и Alloy DaemonSet, который читает
   # логи подов через Kubernetes API. Версии — последние на 2026-11-04 из `helm search
   # repo grafana/... --versions`: 7.5.0 (Loki 3.6.16) и 1.15.0 (Alloy v1.21.3).
   # Namespace общий с monitoring: Alloy нужен доступ к API (RBAC из чарта), а Loki

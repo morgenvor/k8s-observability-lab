@@ -222,7 +222,7 @@ ROUTE_GRAFANA="${PROJECT_ROOT}/.tmp/rendered/route-grafana.yaml"
 ( export GRAFANA_BASE_URL=http://grafana.example.com
   render_demo_manifests ci-route "${ROUTE_GRAFANA}" >/dev/null )
 # Негативный прогон: хост без порта обязан упасть. Валидация, проверенная только руками
-# (так было записано в CHANGELOG), пропустила бы опечатку до самого apply.
+# (так было записано ранее), пропустила бы опечатку до самого apply.
 if ( export SMTP_SMARTHOST=smtp.example.invalid
      render_demo_manifests ci-route "${ROUTE_BAD}" ) >/dev/null 2>&1; then
   die "SMTP_SMARTHOST без порта прошёл рендер: валидация host:port в scripts/lib.sh сломана"
@@ -241,7 +241,7 @@ step "шаблон письма: рендер без кластера"
 if command -v go >/dev/null 2>&1; then
   python3 "${PROJECT_ROOT}/scripts/checks/email_templates.py" \
     "${ROUTE_PLAIN}" "${PROJECT_ROOT}/.tmp/rendered"
-  # go в .tools не пинован (остаточный вопрос в CHANGELOG): в CI это предустановленный
+  # go в .tools не пинован: в CI это предустановленный
   # Go раннера, поэтому шаг проверяется и там; без go ворота честно пропускают шаг.
   unformatted="$(gofmt -l "${PROJECT_ROOT}/scripts/checks/email_template.go")"
   [ -z "${unformatted}" ] || die "gofmt: не отформатирован ${unformatted}"
@@ -391,8 +391,8 @@ fi
 
 # --- 8. Секреты и лабораторные адреса в файлах, которые попадут в git --------
 # Сканируем ровно публикуемый набор: трекаемые файлы + untracked, не покрытые
-# ignore. Внутренние документы (.dsh/, AGENTS.md, CHANGELOG.md) исключены локальным
-# .git/info/exclude и намеренно содержат hostname лабы — их в git нет.
+# ignore. Список строится по git, поэтому файлы, исключённые локально
+# (.git/info/exclude), в скан не попадают.
 step "скан секретов и адресов"
 # Без git список публикуемого набора не построить: молчаливый пропуск здесь означал
 # бы зелёные ворота без скана вовсе.
@@ -430,7 +430,7 @@ case "${scan_rc}" in
 esac
 
 # --- 8a. Личные адреса: в публикуемом наборе только example.invalid/example.com --
-# Правило 4 AGENTS: реальный адрес получателя — такой же секрет, как IP стенда; в
+# Правило проекта: реальный адрес получателя — такой же секрет, как IP стенда; в
 # публикуемом наборе допустимы только example.invalid/example.com (address_scan.py).
 step "скан личных адресов"
 python3 "${PROJECT_ROOT}/scripts/checks/address_scan.py" "${SCAN_FILES[@]}"

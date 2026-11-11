@@ -4,7 +4,7 @@
 # Использование: ./scripts/import-image.sh
 # Env: IMAGE_TAG (иначе короткий git SHA), LAB_SSH_CONFIG (иначе .secrets/ssh_config),
 #      IMPORT_IMAGES="img:tag img2:tag" — импортировать эти образы вместо app/* (например Loki/Alloy:
-#      ноды лабы не всегда успевают скачать их из docker.io, см. CHANGELOG фазы 5)
+#      ноды лабы не всегда успевают скачать их из docker.io)
 set -euo pipefail
 source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
@@ -94,13 +94,13 @@ for node in "${NODES[@]}"; do
   if ! import_to_node "${node}"; then
     # Первый импорт нового образа даёт пик записи на диск, и на control-plane от него
     # перезапускается k3s (embedded etcd теряет лидерство — факт лабы 2026-11-03,
-    # записан в CHANGELOG лабы). Это не ошибка ssh/прав: ждём, пока поднимется
+    # записан в истории эксплуатации стенда). Это не ошибка ssh/прав: ждём, пока поднимется
     # и API, и containerd ноды (одного API мало — `ctr` в этот момент отвечает
-    # «connection refused», так и провалилась первая попытка на control-plane в фазе 5),
+    # «connection refused», так и провалилась первая попытка на control-plane),
     # и повторяем один раз. Повтор дешевле только для стрима (блобы уже в content
     # store); в файловом режиме он снова делает `docker save` и `scp` — но это один
     # раз и осознанно, чтобы не оставлять образ без импорта.
-    warn "импорт в ${node} не удался; жду API и containerd ноды, повторяю один раз (см. CHANGELOG лабы)"
+    warn "импорт в ${node} не удался; жду API и containerd ноды, повторяю один раз"
     ready=0
     for _ in $(seq 1 60); do
       if kubectl get nodes --request-timeout=5s >/dev/null 2>&1 \

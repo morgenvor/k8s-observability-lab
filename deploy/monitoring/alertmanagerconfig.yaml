@@ -18,7 +18,7 @@ metadata:
 # ALERT_EMAIL_FROM/SMTP_SMARTHOST/SMTP_USERNAME). Пароль приложения SMTP живёт только в
 # Secret alertmanager-smtp; в манифесте и репозитории его нет.
 #
-# Поля CRD camelCase (groupBy/groupWait/...), а не snake_case из плана: так описана
+# Поля CRD camelCase (groupBy/groupWait/...), а не snake_case: так описана
 # схема AlertmanagerConfig, и оператор читает именно её.
 spec:
   route:

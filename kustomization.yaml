@@ -1,11 +1,11 @@
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
-# Свои манифесты проекта одним `kubectl apply -k .` (фазы v1.0):
-# deploy/base — namespace demo, приложения, toxiproxy, ServiceMonitor (фаза 2);
-# deploy/dashboards — ConfigMap дашбордов в monitoring (фаза 2);
-# deploy/loki-rules — ConfigMap правил Loki ruler (фаза 5 v1.1);
-# deploy/monitoring — AlertmanagerConfig в monitoring (фаза 4);
-# rules — PrometheusRule (фаза 3).
+# Свои манифесты проекта одним `kubectl apply -k .`:
+# deploy/base — namespace demo, приложения, toxiproxy, ServiceMonitor;
+# deploy/dashboards — ConfigMap дашбордов в monitoring;
+# deploy/loki-rules — ConfigMap правил Loki ruler;
+# deploy/monitoring — AlertmanagerConfig в monitoring;
+# rules — PrometheusRule.
 resources:
   - deploy/base
   - deploy/dashboards

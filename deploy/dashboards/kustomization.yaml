@@ -13,9 +13,9 @@ configMapGenerator:
         app.kubernetes.io/part-of: k8s-observability-lab
       annotations:
         # Папку sidecar учитывает только при folderAnnotation в values Grafana;
-        # без этого дашборд попадёт в общую папку (см. CHANGELOG).
+        # без этого дашборд попадёт в общую папку.
         grafana_folder: demo
-  # SLO-дашборд (фаза 3): бюджеты, burn rate по окнам, текущий SLI.
+  # SLO-дашборд: бюджеты, burn rate по окнам, текущий SLI.
   - name: slo-demo
     files:
       - slo-demo.json

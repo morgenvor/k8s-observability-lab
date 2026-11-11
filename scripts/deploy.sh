@@ -133,7 +133,7 @@ done
 #  1) оба эндпоинта demo-api (2 реплики) скрейпятся;
 #  2) demo-load скрейпится (иначе пропажа его ServiceMonitor прошла бы незамеченной);
 #  3) alert-sink скрейпится: без этой проверки пропажа ServiceMonitor/alert-sink
-#     оставила бы метрики доставки только в самом сервисе (фаза 4);
+#     оставила бы метрики доставки только в самом сервисе;
 #  4) нагрузка реально доходит до demo-api — up=1 ничего не говорит о работоспособности
 #     пути demo-load → toxiproxy → demo-api (инцидент с конфигом toxiproxy 2026-11-03
 #     давал up=1 при 100 % ошибок у клиента).
@@ -271,7 +271,7 @@ info "правила проекта загружены: групп ${groups} (о
 # версии Prometheus другой, absent() будет истинным всегда и правило загорится
 # ложно — это проверяется ДО деплоя правила одним запросом, а не ожиданием 10 минут:
 # при совпадении селектора absent() не может быть истинным. Отдельная живая проверка
-# «ALERTS{...} пусто через 10 минут» — в docs/runbook.md (приёмка после деплоя).
+# «ALERTS{...} пусто через 10 минут» — в docs/runbook.md (проверка после деплоя).
 selector_groups="$(prom_scalar 'count(prometheus_rule_group_rules{rule_group=~".*;demo-slo[.]alerts[.](availability|latency)"})')"
 [ "${selector_groups:-0}" = "2" ] \
   || die "селектор SloAlertRulesAbsent видит ${selector_groups:-0} групп из 2: формат метки rule_group не совпал с выражением в rules/meta.yaml — правило загорится ложно; проверь prometheus_rule_group_rules в /api/v1/query"

@@ -1,6 +1,6 @@
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
-# Объекты проекта, которые обязаны жить в monitoring (фаза 4): их ищет оператор
+# Объекты проекта, которые обязаны жить в monitoring: их ищет оператор
 # kube-prometheus-stack. Отдельный каталог, а не deploy/base, потому что в base
 # стоит `namespace: demo`, и трансформер namespace переписал бы AlertmanagerConfig
 # в demo — маршрут оказался бы в namespace фикстуры, хотя решение плана этого не
