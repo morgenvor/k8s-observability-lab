@@ -30,7 +30,7 @@ RENDERED="$(render_demo_manifests "${TAG}")"
 
 if [ "${ASSUME_YES}" -ne 1 ]; then
   [ -t 0 ] || die "нет интерактивного ввода (stdin не tty): для неинтерактивного запуска используй --yes"
-  warn "будут удалены: namespace demo целиком (4 деплоймента, 3 ServiceMonitor); в monitoring — дашборды demo-red/slo-demo/notifications, ConfigMap loki-rules, AlertmanagerConfig demo-notifications (маршрут уведомлений перестанет работать) и 6 PrometheusRule (demo-slo, demo-slo-alerts, demo-infra, demo-meta, demo-logs-pipeline, demo-alerting-path). Восстановление — ./scripts/deploy.sh с e-mail env (+ kubectl apply -k deploy/loki-rules)"
+  warn "будут удалены: namespace demo целиком (4 деплоймента, 3 ServiceMonitor); в monitoring — дашборды demo-red/slo-demo/notifications, ConfigMap loki-rules, AlertmanagerConfig demo-notifications (маршрут уведомлений перестанет работать) и 6 PrometheusRule (demo-slo, demo-slo-alerts, demo-infra, demo-meta, demo-logs-pipeline, demo-alerting-path). Восстановление: kubectl apply -k deploy/loki-rules (вернуть том правил), затем ./scripts/deploy.sh с e-mail env"
   printf 'Продолжить? [y/N] '
   # || answer="": при EOF read возвращает 1 и под set -e скрипт падал бы без сообщения
   read -r answer || answer=""
@@ -49,9 +49,12 @@ kubectl wait --for=delete ns/demo --timeout=120s >/dev/null 2>&1 \
   || die "namespace demo не удалился за 120 с (Terminating?) — проверь kubectl get ns demo"
 # `delete -f` идёт по ИМЕНАМ из текущего рендера и молчит про то, чего нет: объект,
 # переименованный после деплоя, остался бы в monitoring, а скрипт сказал бы «удалено».
-# Поэтому проверяем остатки по метке проекта, а не по списку имён.
-leftovers="$(kubectl -n monitoring get prometheusrule,configmap,alertmanagerconfig \
-  -l app.kubernetes.io/part-of=k8s-observability-lab -o name 2>/dev/null || true)"
+# Поэтому проверяем остатки по метке проекта, а не по списку имён. Ошибка чтения —
+# провал: `|| true` превратил бы RBAC/таймаут в «остатков нет».
+if ! leftovers="$(kubectl -n monitoring get prometheusrule,configmap,alertmanagerconfig \
+      -l app.kubernetes.io/part-of=k8s-observability-lab -o name 2>/dev/null)"; then
+  die "не удалось проверить остатки после удаления (kubectl вернул ошибку): доступ к кластеру или таймаут. Остатки нужно проверить вручную: kubectl -n monitoring get prometheusrule,configmap,alertmanagerconfig -l app.kubernetes.io/part-of=k8s-observability-lab"
+fi
 [ -z "${leftovers}" ] \
   || die "в monitoring остались объекты проекта (переименованы?): ${leftovers//$'\n'/, } — удали их вручную и повтори проверку"
 info "демо-контур, дашборды, правила, маршрут уведомлений и ConfigMap правил Loki удалены (образы в containerd остались)"

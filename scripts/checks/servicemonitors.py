@@ -1,17 +1,21 @@
 #!/usr/bin/env python3
-"""Ассерты своих ServiceMonitor: метка release и совпадение селектора с метками подов.
+"""Ассерты своих ServiceMonitor: метка release, выбор Service и его порта.
 
 Почему отдельный шаг. `ServiceMonitor` — CRD: kubeconform схему не знает и молчит, а
 `release: monitoring` в метке объекта — то, по чему оператор ищет мониторы
-(`serviceMonitorSelector` в values чарта). Пропажа метки или рассинхрон
-`selector.matchLabels` с метками pod template не ломают ни рендер, ни apply: цели просто
-не появляются в Prometheus, `up`-серий нет, и алерты молчат. Живой гейт `deploy.sh` это
-ловит только после деплоя, поэтому проверка дублируется офлайн.
+(`serviceMonitorSelector` в values чарта). Ошибка в любом звене цепочки не ломает ни
+рендер, ни apply: цель просто не появляется в Prometheus, `up`-серий нет, и алерты
+молчат. Живой гейт `deploy.sh` это ловит только после деплоя, поэтому проверка
+дублируется офлайн.
 
-Проверяется:
-1. в рендере ровно три ServiceMonitor проекта (`demo-api`, `demo-load`, `alert-sink`);
-2. у каждого метка `release: monitoring` и порт эндпоинта `http`;
-3. `selector.matchLabels` — непустое подмножество меток pod template своего Deployment.
+Цепочка, которую проверяем по рендеру kustomize:
+  ServiceMonitor.spec.selector.matchLabels  ⊆  Service.metadata.labels
+  ServiceMonitor.spec.endpoints[].port      =  Service.spec.ports[].name
+  Service.spec.selector                     ⊆  Deployment.spec.template.metadata.labels
+  namespace у всех трёх объектов совпадает
+
+Именно Service, а не под: ServiceMonitor выбирает Service, и пропавшая метка у Service
+(при живой метке у пода) даёт ноль целей при зелёных воротах.
 
 Использование: servicemonitors.py <рендер kustomize>
 """
@@ -23,14 +27,27 @@ from common import fail, find_all, load_docs
 OWN = ("demo-api", "demo-load", "alert-sink")
 
 
-def pod_labels(docs):
-    """Метки pod template каждого Deployment рендера."""
-    labels = {}
-    for doc in find_all(docs, "Deployment"):
+def by_name(docs, kind, where, allow_extra=False):
+    objects = {}
+    for doc in find_all(docs, kind):
         name = (doc.get("metadata") or {}).get("name")
-        template = (doc.get("spec") or {}).get("template") or {}
-        labels[name] = ((template.get("metadata") or {}).get("labels")) or {}
-    return labels
+        objects[name] = doc
+    missing = set(OWN) - set(objects)
+    if missing or (not allow_extra and set(objects) != set(OWN)):
+        fail(
+            f"{kind} в {where}: {sorted(objects)}, ожидались {sorted(OWN)} —"
+            " без любого из трёх объектов цель не скрейпится молча"
+        )
+    return objects
+
+
+def namespace(document):
+    return (document.get("metadata") or {}).get("namespace")
+
+
+def pod_labels(deployment):
+    template = (deployment.get("spec") or {}).get("template") or {}
+    return ((template.get("metadata") or {}).get("labels")) or {}
 
 
 def main():
@@ -38,47 +55,72 @@ def main():
         fail("использование: servicemonitors.py <рендер kustomize>")
     docs = load_docs(sys.argv[1])
 
-    monitors = {}
-    for doc in find_all(docs, "ServiceMonitor"):
-        name = (doc.get("metadata") or {}).get("name")
-        monitors[name] = doc
-    if set(monitors) != set(OWN):
-        fail(
-            f"ServiceMonitor в рендере: {sorted(monitors)}, ожидались {sorted(OWN)} —"
-            " новый сервис без монитора не скрейпится, а удалённый оставит цель без метрик"
-        )
+    monitors = by_name(docs, "ServiceMonitor", "рендере")
+    # В рендере есть и Service/Deployment toxiproxy — он не цель Prometheus, поэтому
+    # для этих видов требуем наличие трёх своих объектов, но не запрещаем лишние.
+    services = by_name(docs, "Service", "рендере", allow_extra=True)
+    deployments = by_name(docs, "Deployment", "рендере", allow_extra=True)
 
-    pods = pod_labels(docs)
     for name in OWN:
-        monitor = monitors[name]
+        monitor, service, deployment = monitors[name], services[name], deployments[name]
+
         labels = (monitor.get("metadata") or {}).get("labels") or {}
         if labels.get("release") != "monitoring":
             fail(
                 f"ServiceMonitor {name}: нет метки release=monitoring —"
                 " оператор его не найдёт, и цели не будет в Prometheus"
             )
+
         endpoints = (monitor.get("spec") or {}).get("endpoints") or []
-        if not endpoints or endpoints[0].get("port") != "http":
-            fail(f"ServiceMonitor {name}: первый эндпоинт не указывает порт 'http' ({endpoints!r})")
+        if not endpoints:
+            fail(f"ServiceMonitor {name}: нет endpoints — монитор ничего не скрейпит")
+        endpoint = endpoints[0]
+        port = endpoint.get("port")
+        if endpoint.get("path") != "/metrics":
+            fail(f"ServiceMonitor {name}: path={endpoint.get('path')!r}, ожидался /metrics")
+
         selector = ((monitor.get("spec") or {}).get("selector") or {}).get("matchLabels") or {}
         if not selector:
             fail(f"ServiceMonitor {name}: пустой selector.matchLabels — монитор не выберет ни один Service")
-        if name not in pods:
-            fail(f"ServiceMonitor {name}: в рендере нет Deployment {name} — селектор не с чем сверить")
-        extra = {
-            key: value
-            for key, value in selector.items()
-            if pods[name].get(key) != value
-        }
-        if extra:
+        service_labels = (service.get("metadata") or {}).get("labels") or {}
+        missed = {key: value for key, value in selector.items() if service_labels.get(key) != value}
+        if missed:
             fail(
-                f"ServiceMonitor {name}: selector.matchLabels {extra!r} не совпадает с метками"
-                f" pod template ({pods[name]!r}) — цель не появится, а алерты промолчат"
+                f"ServiceMonitor {name}: selector.matchLabels {missed!r} не совпадает с метками"
+                f" Service ({service_labels!r}) — цель не появится, а алерты промолчат"
+            )
+
+        ports = (service.get("spec") or {}).get("ports") or []
+        if not any(item.get("name") == port for item in ports):
+            fail(
+                f"Service {name}: порта с именем {port!r} нет в {[item.get('name') for item in ports]!r} —"
+                " endpoint ServiceMonitor ссылается на несуществующий порт"
+            )
+
+        service_selector = (service.get("spec") or {}).get("selector") or {}
+        if not service_selector:
+            fail(f"Service {name}: пустой spec.selector — endpoints у Service не будет")
+        unmatched = {
+            key: value
+            for key, value in service_selector.items()
+            if pod_labels(deployment).get(key) != value
+        }
+        if unmatched:
+            fail(
+                f"Service {name}: spec.selector {unmatched!r} не совпадает с метками pod template"
+                f" ({pod_labels(deployment)!r}) — endpoints пусты, цель не появится"
+            )
+
+        namespaces = {namespace(monitor), namespace(service), namespace(deployment)}
+        if len(namespaces) != 1:
+            fail(
+                f"{name}: ServiceMonitor, Service и Deployment в разных namespace {sorted(map(str, namespaces))}"
+                " — оператор ищет Service только в своём namespace"
             )
 
     print(
-        "ServiceMonitor'ы: 3 объекта, release=monitoring,"
-        " селекторы совпадают с метками подов — ok"
+        "ServiceMonitor'ы: 3 объекта, release=monitoring, Service выбран по меткам,"
+        " порт совпадает, selector Service ⊆ меток подов — ok"
     )
 
 

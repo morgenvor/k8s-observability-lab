@@ -146,7 +146,9 @@ DOCKERFILES=(app/*/Dockerfile)
 for dockerfile in "${DOCKERFILES[@]}"; do
   name="$(basename "$(dirname "${dockerfile}")")"
   step "docker build ${name}:${IMAGE_TAG}"
-  docker build -q -t "${name}:${IMAGE_TAG}" "$(dirname "${dockerfile}")" >/dev/null
+  # Платформа та же, что у build-image.sh/check.sh: локальный smoke не должен
+  # собирать другой архитектурный образ, чем уезжает на ноды.
+  docker build -q --platform linux/amd64 -t "${name}:${IMAGE_TAG}" "$(dirname "${dockerfile}")" >/dev/null
 done
 
 # --- 2. Запуск в изолированной сети -----------------------------------------
