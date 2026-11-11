@@ -20,7 +20,9 @@ need_cmd jq
 TESTS_DIR="${PROJECT_ROOT}/.tmp/drills-tests"
 export EVIDENCE_DIR="${TESTS_DIR}/evidence"
 export DRILL_STATE_DIR="${TESTS_DIR}/state"
-rm -rf "${TESTS_DIR}"
+# :? — чтобы пустой/опечатанный TESTS_DIR не превратил удаление в `rm -rf` от корня
+# (тот же приём, что в scripts/check.sh для каталога rulefiles).
+rm -rf "${TESTS_DIR:?}"
 mkdir -p "${EVIDENCE_DIR}" "${DRILL_STATE_DIR}"
 
 TODAY="$(date -u +%F)"

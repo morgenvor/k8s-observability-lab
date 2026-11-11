@@ -9,7 +9,14 @@ source "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
 WITH_IMAGES=0
 WITH_SMOKE=0
-STRICT="${CHECK_STRICT:-0}"
+# Значение CHECK_STRICT разбирается явно: `[ "true" -eq 1 ]` в bash печатает ошибку
+# «ожидается целочисленное выражение», условие становится ложным, и строгий режим
+# тихо выключается — ровно тогда, когда пропуски есть и он нужнее всего.
+case "${CHECK_STRICT:-0}" in
+  0|false|no) STRICT=0 ;;
+  1|true|yes) STRICT=1 ;;
+  *) die "CHECK_STRICT='${CHECK_STRICT}' не распознан: используй 1/true (включить) или 0/false (выключить)" ;;
+esac
 for arg in "$@"; do
   case "${arg}" in
     --images) WITH_IMAGES=1 ;;
@@ -62,13 +69,19 @@ else
 fi
 
 # --- 2. Тесты приложений ----------------------------------------------------
+# Список пакетов проверяется явно: без этого при переименовании app/ цикл с nullglob
+# не выполнился бы ни разу, шаг исчез бы из вывода, а --strict не спас бы — пропуска
+# как такового нет.
 shopt -s nullglob
-for pkg in app/*/package.json; do
+APP_PACKAGES=(app/*/package.json)
+shopt -u nullglob
+[ "${#APP_PACKAGES[@]}" -gt 0 ] \
+  || die "в app/*/package.json ничего не найдено — тесты приложений не запустились бы"
+for pkg in "${APP_PACKAGES[@]}"; do
   app_dir="$(dirname "${pkg}")"
   step "npm ci + npm test: ${app_dir}"
   ( cd "${app_dir}" && npm ci --silent && npm test )
 done
-shopt -u nullglob
 
 # --- 3. Сторонние чарты: helmfile template + kubeconform ---------------------
 # Рендерим ВСЕ релизы helmfile.yaml одним файлом: релиз без своей строки в воротах
@@ -151,6 +164,14 @@ kubectl kustomize . > .tmp/rendered/kustomize.yaml
 # Пустой рендер теперь означает сломанный kustomization.yaml, а не «пока нечего рендерить».
 [ -s .tmp/rendered/kustomize.yaml ] || die "рендер kustomize пуст — проверь resources в kustomization.yaml"
 kubeconform -strict -ignore-missing-schemas -summary -output text .tmp/rendered/kustomize.yaml
+
+# --- 4-0. ServiceMonitor своих сервисов: метка release и селектор -------------
+# kubeconform схему CRD не знает; пропавшая метка release=monitoring или селектор,
+# не совпавший с метками пода, оставляют цель без скрейпа — и алерты молчат.
+# Живой гейт deploy.sh видит это только после apply (servicemonitors.py).
+step "ServiceMonitor'ы демо-контура (метка release и селектор)"
+python3 "${PROJECT_ROOT}/scripts/checks/servicemonitors.py" \
+  "${PROJECT_ROOT}/.tmp/rendered/kustomize.yaml"
 
 # --- 4a. Дашборды Grafana: JSON внутри ConfigMap kubeconform не проверяет ----
 step "дашборды: валидность JSON"
@@ -374,7 +395,9 @@ if [ "${WITH_IMAGES}" -eq 1 ]; then
       app_dir="$(dirname "${dockerfile}")"
       name="$(basename "${app_dir}")"
       printf -- '--- %s\n' "${name}"
-      docker build -t "${name}:check" "${app_dir}"
+      # Платформа та же, что у build-image.sh: второй путь сборки не должен
+      # собирать другой архитектурный образ (на ноды едет только amd64).
+      docker build --platform linux/amd64 -t "${name}:check" "${app_dir}"
     done
   fi
 fi

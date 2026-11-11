@@ -63,9 +63,20 @@ RENDERED="$(render_demo_manifests "${TAG}")"
 # что уже стоит в кластере: живое значение, которое не задано в env, — повод остановиться.
 # Осознанный переход на плейсхолдеры (например, при сносе ветки) разрешается явно:
 # ALERT_EMAIL_ALLOW_PLACEHOLDER=1.
+# Ошибку чтения нельзя трактовать как «живого значения нет»: при таймауте или RBAC-отказе
+# пустой ответ выглядел бы как «защищать нечего», и apply затёр бы рабочий маршрут.
+# Поэтому «объекта ещё нет» (NotFound) — норма, остальные ошибки — провал.
 live_email_field() {
-  kubectl -n monitoring get alertmanagerconfig demo-notifications \
-    -o jsonpath="{.spec.receivers[1].emailConfigs[0].$1}" 2>/dev/null || true
+  local out
+  if ! out="$(kubectl -n monitoring get alertmanagerconfig demo-notifications \
+      -o jsonpath="{.spec.receivers[1].emailConfigs[0].$1}" 2>&1)"; then
+    case "${out}" in
+      *NotFound*|*"not found"*) return 0 ;;
+    esac
+    printf '%s\n' "${out}" >&2
+    return 2
+  fi
+  printf '%s' "${out}"
 }
 if [ "${ALERT_EMAIL_ALLOW_PLACEHOLDER:-0}" != "1" ]; then
   PLACEHOLDER_DOWNGRADED=()
@@ -76,7 +87,9 @@ if [ "${ALERT_EMAIL_ALLOW_PLACEHOLDER:-0}" != "1" ]; then
     if [ -n "${!email_env:-}" ]; then
       continue
     fi
-    live_value="$(live_email_field "${email_field}")"
+    if ! live_value="$(live_email_field "${email_field}")"; then
+      die "не удалось прочитать живой AlertmanagerConfig monitoring/demo-notifications: гейт не может доказать, что apply не затрёт живые адреса. Проверь доступ к кластеру (kubectl -n monitoring get alertmanagerconfig) или подтверди намерение явно: ALERT_EMAIL_ALLOW_PLACEHOLDER=1"
+    fi
     if [ -z "${live_value}" ]; then
       continue
     fi
@@ -120,6 +133,10 @@ prom_scalar() { # $1 — PromQL; печатает значение единст�
 info "ожидание порт-форварда к Prometheus"
 forward_ready=0
 for _ in $(seq 1 30); do
+  # Процесс port-forward мог завершиться сразу (занятый порт, нет прав): тогда curl
+  # «не отвечает» до таймаута, и причина выглядит как недоступный Prometheus.
+  kill -0 "${PF_PID}" 2>/dev/null \
+    || die "процесс port-forward к Prometheus завершился (порт ${PROM_PORT} занят?) — освободи порт или задай PROM_PORT"
   if curl -sf -G "http://127.0.0.1:${PROM_PORT}/api/v1/query" \
       --data-urlencode 'query=vector(1)' >/dev/null 2>&1; then
     forward_ready=1
@@ -180,6 +197,8 @@ EXPECT_USER="${SMTP_USERNAME:-alertmanager}"
 route_active=0
 route_deadline=$((SECONDS + 60))
 while [ "${SECONDS}" -lt "${route_deadline}" ]; do
+  kill -0 "${AM_PF_PID}" 2>/dev/null \
+    || die "процесс port-forward к Alertmanager завершился (порт ${AM_PORT} занят?) — освободи порт или задай AM_PORT"
   if curl -sf "http://127.0.0.1:${AM_PORT}/api/v2/status" 2>/dev/null \
       | python3 -c '
 import json
@@ -212,6 +231,29 @@ for receiver in config.get("receivers") or []:
     if mismatched:
         print(", ".join(mismatched), file=sys.stderr)
         sys.exit(1)
+    # Одних адресов мало: маршрут мог приехать без ветки AlertSink.* -> email (так и
+    # было в кластере 2026-11-10, обнаружилось пробой). Проверяем дерево целиком.
+    routes = ((config.get("route") or {}).get("routes") or [])
+    problems = []
+    if len(routes) != 4:
+        problems.append(f"child-routes={len(routes)} (ожидалось 4)")
+    else:
+        names = [str(route.get("receiver", "")) for route in routes]
+        matched = [str(route.get("matchers")) for route in routes]
+        if not (names[0].endswith("/email") and routes[0].get("continue") is True
+                and "AlertSink" in matched[0]):
+            problems.append("ветка alertname=~AlertSink.* -> email с continue")
+        if not (names[1].endswith("/email") and routes[1].get("continue") is True
+                and "page|critical" in matched[1]):
+            problems.append("ветка severity=~page|critical -> email с continue")
+        if not (names[2].endswith("/alert-sink") and not routes[2].get("continue")
+                and "ticket|info|warning|none" in matched[2]):
+            problems.append("ветка severity=~ticket|info|warning|none -> alert-sink")
+        if not (names[3].endswith("/alert-sink") and not routes[3].get("matchers")):
+            problems.append("catch-all без матчеров -> alert-sink")
+    if problems:
+        print("; ".join(problems), file=sys.stderr)
+        sys.exit(1)
     sys.exit(0)
 print("/email", file=sys.stderr)
 sys.exit(1)
@@ -222,7 +264,7 @@ sys.exit(1)
   sleep 5
 done
 [ "${route_active}" = "1" ] \
-  || die "активный конфиг Alertmanager не совпал с применённым (получатель /email или поля из env). Оператор мог не пересобрать конфиг — проверь 'kubectl -n monitoring get alertmanagerconfig demo-notifications', Secret alertmanager-smtp и лог Alertmanager; gzip-конфиг лежит в secret ...-generated (не печатай его: там пароль)"
+  || die "активный конфиг Alertmanager не совпал с применённым (дерево из четырёх child-route, получатель /email или поля из env). Оператор мог не пересобрать конфиг — проверь 'kubectl -n monitoring get alertmanagerconfig demo-notifications', Secret alertmanager-smtp и лог Alertmanager; gzip-конфиг лежит в secret ...-generated (не печатай его: там пароль)"
 # Метрика reload — второй, дешёвый признак: 0 означает, что Alertmanager отверг конфиг.
 # Скрейп Prometheus приходит с задержкой, поэтому ждём отдельно и недолго.
 reload_ok=""

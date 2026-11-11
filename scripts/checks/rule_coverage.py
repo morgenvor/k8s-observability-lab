@@ -21,15 +21,11 @@ from common import fail, load_docs
 
 SEVERITIES = {"page", "ticket"}
 
-# Алерты, у которых тест описывает только «не горит». Срабатывающий кейс требует
-# подобрать серии под окна 6x (30m/6h) и 1x (3d) — это отдельная задача про правила,
-# а не про ворота. Запись здесь — видимый долг: новый алерт без срабатывающего кейса
-# валит ворота, а когда кейс появится, запись надо убрать (ассерт это проверит).
-NEGATIVE_ONLY_ALLOWED = {
-    "SloDemoAvailabilityBurnMedium",
-    "SloDemoLatencyBurnMedium",
-    "SloDemoLatencyBurnSlow",
-}
+# Алерты, у которых тест описывает только «не горит». Список пуст: срабатывающие кейсы
+# есть у всех, включая medium/slow (7 % ошибок 8 часов и 6 % медленных три дня).
+# Механизм оставлен на будущее: новый алерт без срабатывающего кейса валит ворота, а
+# когда кейс появится, запись надо убрать (ассерт это проверит).
+NEGATIVE_ONLY_ALLOWED = set()
 
 
 def alert_definitions(rulefiles_dir):
@@ -97,7 +93,9 @@ def main():
         if not rule.get("for"):
             fail(f"{name}: не задан `for` — алерт срабатывает мгновенно, без окна на флап")
         annotations = rule.get("annotations") or {}
-        for key in ("summary", "runbook_url"):
+        # description обязателен: шаблон письма печатает `.Annotations.description`, и
+        # новый алерт без него дал бы письмо без оценки масштаба при зелёных воротах.
+        for key in ("summary", "description", "runbook_url"):
             if not annotations.get(key):
                 fail(f"{name}: пустой annotations.{key} — уведомление без описания или процедуры")
 

@@ -67,11 +67,13 @@ import yaml
 total = 0
 for path in sys.argv[1:]:
     with open(path, encoding="utf-8") as handle:
-        doc = yaml.safe_load(handle)
-    # Служебные файлы (kustomization.yaml) — не правила.
-    if not isinstance(doc, dict) or doc.get("kind") != "PrometheusRule":
-        continue
-    total += len((doc.get("spec") or {}).get("groups") or [])
+        # safe_load_all, а не safe_load: второй YAML-документ в файле иначе молча
+        # выпал бы из подсчёта, и deploy.sh ждал бы меньше групп, чем применил.
+        docs = list(yaml.safe_load_all(handle))
+    for doc in docs:
+        # Служебные файлы (kustomization.yaml) — не правила.
+        if isinstance(doc, dict) and doc.get("kind") == "PrometheusRule":
+            total += len((doc.get("spec") or {}).get("groups") or [])
 print(total)
 PY
 }
@@ -140,11 +142,6 @@ render_demo_manifests() {
   fi
   if [ -n "${SMTP_USERNAME:-}" ]; then
     email_patches+=("/spec/receivers/1/emailConfigs/0/authUsername $(json_string "${SMTP_USERNAME}")")
-  fi
-  if [ "${#email_patches[@]}" -eq 0 ] && [ -z "${EMAIL_PLACEHOLDER_WARNED:-}" ]; then
-    # Один раз на процесс: deploy/rollback/check рендерят несколько раз подряд.
-    EMAIL_PLACEHOLDER_WARNED=1
-    warn "ALERT_EMAIL_TO/ALERT_EMAIL_FROM/SMTP_SMARTHOST/SMTP_USERNAME не заданы — в маршруте останутся плейсхолдеры example.invalid"
   fi
   local images=()
   local dockerfile

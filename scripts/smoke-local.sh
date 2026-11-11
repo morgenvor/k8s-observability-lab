@@ -189,7 +189,12 @@ for _ in $(seq 1 20); do
   sleep 0.5
 done
 BEFORE="$(metric_sum "${LOAD_URL}" load_requests_total 'outcome="ok"')"
-if [ "${BEFORE%.*}" -le 0 ]; then
+# metric_sum печатает число, но при сломанном парсинге может выдать пусто/мусор:
+# `[ "" -le 0 ]` даёт ошибку, условие ложно, и проверка тихо пропускается.
+case "${BEFORE}" in
+  ''|*[!0-9]*) die "metric_sum вернул не число ('${BEFORE}') — проверка роста нагрузки недостоверна" ;;
+esac
+if [ "${BEFORE}" -le 0 ]; then
   die "demo-load не выполнил ни одного ok-запроса за 10 с (доступен ли TARGET_URL?)"
 fi
 
@@ -203,7 +208,10 @@ step "рост load_requests_total{outcome=\"ok\"} за 10 с"
 sleep 10
 AFTER="$(metric_sum "${LOAD_URL}" load_requests_total 'outcome="ok"')"
 printf 'ok-запросов: %s -> %s\n' "${BEFORE}" "${AFTER}"
-if [ "${AFTER%.*}" -le "${BEFORE%.*}" ]; then
+case "${AFTER}" in
+  ''|*[!0-9]*) die "metric_sum вернул не число ('${AFTER}') — проверка роста нагрузки недостоверна" ;;
+esac
+if [ "${AFTER}" -le "${BEFORE}" ]; then
   die "load_requests_total не растёт (${BEFORE} -> ${AFTER}); демо-нагрузка не работает"
 fi
 

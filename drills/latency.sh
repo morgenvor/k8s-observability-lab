@@ -19,6 +19,15 @@ LATENCY_MS="${LATENCY_MS:-400}"
 JITTER_MS="${JITTER_MS:-50}"
 EXPECT_REACTION="${EXPECT_REACTION:-1800}"
 EXPECT_RECOVERY="${EXPECT_RECOVERY:-600}"
+# Значения уходят в JSON токсина и в арифметику таймаутов: «400мс» или пустая строка
+# дали бы либо невалидный payload, либо мгновенный/вечный дрилл. Та же проверка, что
+# в drills/oomkill.sh.
+for var in LATENCY_MS JITTER_MS EXPECT_REACTION EXPECT_RECOVERY; do
+  case "${!var}" in
+    ''|*[!0-9]*) die "${var}='${!var}' не целое положительное число" ;;
+  esac
+  [ "${!var}" -gt 0 ] || die "${var} должен быть больше нуля (получено '${!var}')"
+done
 TOXIC="latency_drill"
 
 drill_evidence_init latency

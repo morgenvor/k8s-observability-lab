@@ -23,10 +23,23 @@ def main():
     out_dir, paths = sys.argv[1], sys.argv[2:]
     for path in paths:
         with open(path, encoding="utf-8") as handle:
-            doc = yaml.safe_load(handle)
+            # safe_load_all: multipart-файл с двумя PrometheusRule иначе потерял бы
+            # второй документ — и он молча не поехал бы ни в promtool, ни в кластер.
+            docs = list(yaml.safe_load_all(handle))
+        rules = [
+            doc
+            for doc in docs
+            if isinstance(doc, dict) and doc.get("kind") == "PrometheusRule"
+        ]
         # kustomization.yaml и прочие служебные файлы пропускаем: это не правила.
-        if not isinstance(doc, dict) or doc.get("kind") != "PrometheusRule":
+        if not rules:
             continue
+        if len(rules) > 1 and os.path.basename(path) != "kustomization.yaml":
+            fail(
+                f"{path}: {len(rules)} PrometheusRule в одном файле — выгрузка пишет один"
+                " выходной файл на входной и потеряла бы остальные"
+            )
+        doc = rules[0]
         groups = (doc.get("spec") or {}).get("groups")
         if not groups:
             fail(f"{path}: в PrometheusRule нет spec.groups")

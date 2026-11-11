@@ -2,7 +2,8 @@
 # Дрилл oomkill: контейнер demo-api убит OOM внутри лимита памяти.
 #
 # Инъекция: kubectl exec в под demo-api и запись в буфер размером больше лимита
-# (200 MiB при лимите 128Mi). cgroup-лимит достигается на записи в страницы, после
+# (200 MiB при лимите 192Mi в текущем манифесте). cgroup-лимит достигается на записи в
+# страницы, после
 # чего `memory.oom.group=1` в pod-cgroup убивает весь cgroup: контейнер завершается
 # с OOMKilled (exit 137), kubelet его перезапускает. Спеку и лимиты не меняем —
 # дрейфа манифестов после дрилла быть не должно.
@@ -81,7 +82,18 @@ case "${restarts_before}" in
 esac
 event "target" "под ${pod}, рестартов до дрилла: ${restarts_before}"
 
-event "inject" "kubectl exec ${pod}: пишу ${ALLOC_MB} MiB при лимите 128Mi"
+# Лимит памяти читаем из деплоймента, а не пишем в текст константой: лимит уже менялся
+# (128Mi -> 192Mi), и жёсткая строка в транскрипте сделала бы evidence ложным.
+memory_limit="$(kubectl -n "${DEMO_NS}" get deploy demo-api \
+  -o jsonpath='{.spec.template.spec.containers[?(@.name=="demo-api")].resources.limits.memory}' 2>/dev/null || true)"
+limit_mb="${memory_limit%Mi}"
+case "${limit_mb}" in
+  ''|*[!0-9]*) limit_mb="" ;;
+esac
+if [ -n "${limit_mb}" ] && [ "${ALLOC_MB}" -le "${limit_mb}" ]; then
+  die "ALLOC_MB=${ALLOC_MB} не больше лимита памяти demo-api (${memory_limit}): OOM не наступит. Подними ALLOC_MB"
+fi
+event "inject" "kubectl exec ${pod}: пишу ${ALLOC_MB} MiB при лимите ${memory_limit:-не задан}"
 inject_epoch="$(date -u +%s)"
 # Процесс и контейнер убивает cgroup, поэтому ненулевой код возврата (137) здесь
 # ожидаем и не является ошибкой дрилла: результат проверяется по состоянию пода.

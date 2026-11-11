@@ -1,9 +1,11 @@
 #!/usr/bin/env bash
-# Откат демо-контура: удаляет объекты из того же рендера, что и scripts/deploy.sh.
-# Удаление namespace demo уносит поды/сервисы/ServiceMonitor; объекты в monitoring
-# (дашборды demo-red, slo-demo, notifications и PrometheusRule demo-*) удаляются отдельно.
+# Откат проекта: удаляет ВСЕ объекты из того же рендера, что и scripts/deploy.sh.
+# Удаляются: namespace demo целиком (demo-api, demo-load, alert-sink, toxiproxy и их
+# Service/ServiceMonitor), три ConfigMap дашбордов, шесть PrometheusRule, AlertmanagerConfig
+# demo-notifications (а с ним — весь маршрут уведомлений) и ConfigMap loki-rules (том
+# правил Loki). После отката письма page|critical и записи в /timeline прекращаются, а Loki
+# не поднимется после рестарта без ConfigMap: восстановление — docs/runbook.md, раздел 3.
 # Узкий откат одного дашборда — `kubectl -n monitoring delete cm notifications`.
-# Внимание: вместе с правилами уходит и SLO-оповещение, включая SloRulesAbsent.
 # Образы в containerd остаются — они безвредны.
 # Использование: ./scripts/rollback.sh [--yes]
 set -euo pipefail
@@ -14,7 +16,7 @@ ASSUME_YES=0
 for arg in "$@"; do
   case "${arg}" in
     --yes|-y) ASSUME_YES=1 ;;
-    -h|--help) sed -n '2,7p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help) sed -n '2,9p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) die "неизвестный флаг: ${arg} (см. --help)" ;;
   esac
 done
@@ -28,7 +30,7 @@ RENDERED="$(render_demo_manifests "${TAG}")"
 
 if [ "${ASSUME_YES}" -ne 1 ]; then
   [ -t 0 ] || die "нет интерактивного ввода (stdin не tty): для неинтерактивного запуска используй --yes"
-  warn "будут удалены namespace demo (поды/сервисы демо-контура), дашборды demo-red, slo-demo и notifications, PrometheusRule demo-slo/demo-slo-alerts/demo-infra/demo-meta/demo-logs-pipeline в monitoring"
+  warn "будут удалены: namespace demo целиком (4 деплоймента, 3 ServiceMonitor); в monitoring — дашборды demo-red/slo-demo/notifications, ConfigMap loki-rules, AlertmanagerConfig demo-notifications (маршрут уведомлений перестанет работать) и 6 PrometheusRule (demo-slo, demo-slo-alerts, demo-infra, demo-meta, demo-logs-pipeline, demo-alerting-path). Восстановление — ./scripts/deploy.sh с e-mail env (+ kubectl apply -k deploy/loki-rules)"
   printf 'Продолжить? [y/N] '
   # || answer="": при EOF read возвращает 1 и под set -e скрипт падал бы без сообщения
   read -r answer || answer=""
@@ -45,4 +47,11 @@ kubectl delete --ignore-not-found -f "${RENDERED}"
 # ошибка будет выглядеть как «apply не сработал». Поэтому ждём и падаем явно.
 kubectl wait --for=delete ns/demo --timeout=120s >/dev/null 2>&1 \
   || die "namespace demo не удалился за 120 с (Terminating?) — проверь kubectl get ns demo"
-info "демо-контур, дашборды и правила удалены (образы в containerd остались)"
+# `delete -f` идёт по ИМЕНАМ из текущего рендера и молчит про то, чего нет: объект,
+# переименованный после деплоя, остался бы в monitoring, а скрипт сказал бы «удалено».
+# Поэтому проверяем остатки по метке проекта, а не по списку имён.
+leftovers="$(kubectl -n monitoring get prometheusrule,configmap,alertmanagerconfig \
+  -l app.kubernetes.io/part-of=k8s-observability-lab -o name 2>/dev/null || true)"
+[ -z "${leftovers}" ] \
+  || die "в monitoring остались объекты проекта (переименованы?): ${leftovers//$'\n'/, } — удали их вручную и повтори проверку"
+info "демо-контур, дашборды, правила, маршрут уведомлений и ConfigMap правил Loki удалены (образы в containerd остались)"
