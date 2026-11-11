@@ -32,7 +32,8 @@ spec:
         # Хвостовой `or vector(1)` закрывает другой случай: метрик нагрузки нет
         # вообще (правило живо, судить не о чем) — SLO не деградирует. Пропажу цели
         # demo-load ловит TargetDown чарта (up==0 в группе job), пропажу самих правил —
-        # SloRulesAbsent. Не покрыт ничем случай «генератор жив, но даёт 0 rps».
+        # SloRulesAbsent, а «генератор жив, но даёт 0 rps» — SloDemoNoTraffic
+        # (rules/meta.yaml).
         - record: slo:demo_availability:ratio_5m
           expr: |
             (

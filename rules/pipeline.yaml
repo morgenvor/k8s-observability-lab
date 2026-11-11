@@ -15,8 +15,9 @@
 #   * Alloy: шаблон чарта job не трогает, job = имя Service ("alloy").
 # Проверять не глазами, а `.tmp/rendered/helmfile.yaml` и живым /api/v1/targets.
 #
-# Severity по контракту проекта: page — только SLO burn-rate fast и SloRulesAbsent
-# (отказ сервиса и его страниц), ticket — событие для планового разбора. Свои info
+# Severity по контракту проекта: page — SLO burn-rate fast, SloRulesAbsent и
+# SloAlertRulesAbsent (отказ сервиса и его страниц), ticket — событие для планового
+# разбора. Свои info
 # не ставим: ингибитор чарта (source: InfoInhibitor, target: severity="info", equal:
 # namespace) глушит одиночный info, и такой алерт до sink не доходит вовсе —
 # проверено на стенде 2026-11-10 (rules/meta.yaml, LoadGeneratorThrottled). Слепота,

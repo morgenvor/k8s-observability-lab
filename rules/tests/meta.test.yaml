@@ -239,8 +239,9 @@ tests:
                 Группы demo-alerting-path.heartbeat нет в prometheus_rule_group_rules
                 дольше 10 минут: PrometheusRule demo-alerting-path не применён, потерял
                 метку release=monitoring или его не подхватил оператор. Пока это так,
-                молчание маршрута до sink никто не сторожит (AlertSinkHeartbeatMissing,
-                AlertSinkNeverReceived и AlertSinkTargetMissing не существуют), и тишина
+                молчание маршрута до sink никто не сторожит: правила
+                AlertSinkHeartbeatMissing, AlertSinkNeverReceived и AlertSinkTargetMissing
+                не вычисляются (их группы нет в памяти Prometheus), и тишина
                 выглядит как норма. Проверь kubectl -n monitoring get prometheusrule
                 demo-alerting-path, /api/v1/rules и лог оператора.
               runbook_url: "https://github.com/morgenvor/k8s-observability-lab/blob/main/docs/runbook.md#путь-уведомлений"
@@ -275,3 +276,54 @@ tests:
       - eval_time: 30m
         alertname: AlertPathRulesAbsent
         exp_alerts: []
+
+  # Ветка «пропала только одна группа» у каждого сторожа: в предыдущих кейсах
+  # отсутствовали обе/все, поэтому одиночная потеря не проверялась.
+  - name: "пропала только demo-slo.alerts.availability: SloAlertRulesAbsent горит"
+    interval: 1m
+    input_series:
+      - series: 'prometheus_rule_group_rules{rule_group="/etc/prometheus/rules/x.yaml;demo-slo.alerts.latency"}'
+        values: '2x30'
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: SloAlertRulesAbsent
+        exp_alerts:
+          - exp_labels:
+              severity: page
+              service: demo-api
+              namespace: demo
+            exp_annotations:
+              summary: "Burn-rate алерты demo не загружены в Prometheus"
+              description: >-
+                Групп demo-slo.alerts.availability или demo-slo.alerts.latency нет в
+                памяти Prometheus дольше 10 минут: PrometheusRule demo-slo-alerts не
+                подхватился (нет метки release=monitoring?), группа падает или её
+                выкинул оператор. Записанные серии slo:* при этом живы, поэтому
+                SloRulesAbsent молчит, а страниц по бюджету ошибок нет вовсе — тишина
+                не означает «всё хорошо».
+              runbook_url: "https://github.com/morgenvor/k8s-observability-lab/blob/main/docs/runbook.md#sloalertrulesabsent"
+
+  - name: "пропала только demo-logs-pipeline.alloy: LogsPipelineRulesAbsent горит"
+    interval: 1m
+    input_series:
+      - series: 'prometheus_rule_group_rules{rule_group="/etc/prometheus/rules/z.yaml;demo-logs-pipeline.loki"}'
+        values: '5x30'
+    alert_rule_test:
+      - eval_time: 30m
+        alertname: LogsPipelineRulesAbsent
+        exp_alerts:
+          - exp_labels:
+              severity: ticket
+              service: loki
+              namespace: monitoring
+            exp_annotations:
+              summary: "Правила пайплайна логов не загружены в Prometheus"
+              description: >-
+                Групп demo-logs-pipeline.loki или demo-logs-pipeline.alloy нет в
+                prometheus_rule_group_rules дольше 10 минут: PrometheusRule
+                demo-logs-pipeline не применён, потерял метку release=monitoring или
+                упал. Тогда не работают ни алерты Loki/Alloy, ни сторожа самого правила
+                ruler — отказ приёма логов и потеря строк невидимы. Проверь
+                kubectl -n monitoring get prometheusrule demo-logs-pipeline,
+                /api/v1/rules и lastError группы.
+              runbook_url: "https://github.com/morgenvor/k8s-observability-lab/blob/main/docs/runbook.md#пайплайн-логов"

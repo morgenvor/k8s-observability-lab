@@ -32,6 +32,20 @@ tests:
         values: '0+300x200'
       - series: 'load_request_duration_seconds_count{job="demo-load",namespace="demo"}'
         values: '0+300x200'
+      # Фикстуры сторожей: иначе SloDemoNoTraffic (нет up), SloAlertRulesAbsent и
+      # сторожа групп (нет prometheus_rule_group_rules) горят, а тест их не видит.
+      - series: 'up{job="demo-load",namespace="demo"}'
+        values: '1x200'
+      - series: 'prometheus_rule_group_rules{rule_group="/etc/prometheus/rules/x.yaml;demo-slo.alerts.availability"}'
+        values: '2x200'
+      - series: 'prometheus_rule_group_rules{rule_group="/etc/prometheus/rules/x.yaml;demo-slo.alerts.latency"}'
+        values: '2x200'
+      - series: 'prometheus_rule_group_rules{rule_group="/etc/prometheus/rules/y.yaml;demo-alerting-path.heartbeat"}'
+        values: '3x200'
+      - series: 'prometheus_rule_group_rules{rule_group="/etc/prometheus/rules/z.yaml;demo-logs-pipeline.loki"}'
+        values: '5x200'
+      - series: 'prometheus_rule_group_rules{rule_group="/etc/prometheus/rules/z.yaml;demo-logs-pipeline.alloy"}'
+        values: '5x200'
     promql_expr_test:
       - expr: slo:demo_availability:ratio_5m
         eval_time: 150m
@@ -69,6 +83,18 @@ tests:
         exp_alerts: []
       - eval_time: 150m
         alertname: SloRulesAbsent
+        exp_alerts: []
+      - eval_time: 150m
+        alertname: SloAlertRulesAbsent
+        exp_alerts: []
+      - eval_time: 150m
+        alertname: SloDemoNoTraffic
+        exp_alerts: []
+      - eval_time: 150m
+        alertname: AlertPathRulesAbsent
+        exp_alerts: []
+      - eval_time: 150m
+        alertname: LogsPipelineRulesAbsent
         exp_alerts: []
 
   # Три дня здоровья, затем 15 минут полного отказа. Fast горит: 5m видит 100x,
@@ -359,7 +385,7 @@ tests:
   # Значение NaN здесь НЕ утверждается: promtool сравнивает через `==`, а NaN != NaN —
   # проба показала, что он падает даже при совпадающих exp/got. Проверяется только
   # молчание алертов. Пропажу цели demo-load ловит TargetDown чарта, пропажу правил —
-  # SloRulesAbsent; случай «генератор жив, но 0 rps» не покрыт ничем.
+  # SloRulesAbsent; «генератор жив, но 0 rps» покрыт SloDemoNoTraffic (rules/meta.yaml).
   - name: "нулевой трафик: SLI NaN, SLO-алерты молчат"
     interval: 1m
     input_series:
@@ -393,7 +419,9 @@ tests:
   # которое никогда не станет истинным, проходило ворота. Сценарии подобраны так,
   # чтобы горел ровно один алерт: доля ошибок 7 % даёт burn 7x во всех коротких
   # окнах, те же 7 % за 480 минут в трёхдневном окне — 0,78x (slow молчит),
-  # а fast (14,4x) не достигается.
+  # а fast (14,4x) не достигается. Остальные алерты файла (второй SLO, три
+  # latency/availability и сторожа из meta.yaml) в каждом кейсе перечислены с
+  # exp_alerts: [] — фикстуры up и prometheus_rule_group_rules для этого добавлены.
   - name: "7 % ошибок дольше 6 часов: горит только availability medium"
     interval: 1m
     input_series:
@@ -405,6 +433,20 @@ tests:
         values: '0+300x4800'
       - series: 'load_request_duration_seconds_count{job="demo-load",namespace="demo"}'
         values: '0+300x4800'
+      # Те же фикстуры, что в первом кейсе: сторожей надо погасить, иначе «горит
+      # ровно один» не проверяется.
+      - series: 'up{job="demo-load",namespace="demo"}'
+        values: '1x4800'
+      - series: 'prometheus_rule_group_rules{rule_group="/etc/prometheus/rules/x.yaml;demo-slo.alerts.availability"}'
+        values: '2x4800'
+      - series: 'prometheus_rule_group_rules{rule_group="/etc/prometheus/rules/x.yaml;demo-slo.alerts.latency"}'
+        values: '2x4800'
+      - series: 'prometheus_rule_group_rules{rule_group="/etc/prometheus/rules/y.yaml;demo-alerting-path.heartbeat"}'
+        values: '3x4800'
+      - series: 'prometheus_rule_group_rules{rule_group="/etc/prometheus/rules/z.yaml;demo-logs-pipeline.loki"}'
+        values: '5x4800'
+      - series: 'prometheus_rule_group_rules{rule_group="/etc/prometheus/rules/z.yaml;demo-logs-pipeline.alloy"}'
+        values: '5x4800'
     alert_rule_test:
       - eval_time: 4800m
         alertname: SloDemoAvailabilityBurnMedium
@@ -428,11 +470,35 @@ tests:
       - eval_time: 4800m
         alertname: SloDemoAvailabilityBurnSlow
         exp_alerts: []
+      - eval_time: 4800m
+        alertname: SloDemoLatencyBurnFast
+        exp_alerts: []
+      - eval_time: 4800m
+        alertname: SloDemoLatencyBurnMedium
+        exp_alerts: []
+      - eval_time: 4800m
+        alertname: SloDemoLatencyBurnSlow
+        exp_alerts: []
+      - eval_time: 4800m
+        alertname: SloRulesAbsent
+        exp_alerts: []
+      - eval_time: 4800m
+        alertname: SloAlertRulesAbsent
+        exp_alerts: []
+      - eval_time: 4800m
+        alertname: SloDemoNoTraffic
+        exp_alerts: []
+      - eval_time: 4800m
+        alertname: AlertPathRulesAbsent
+        exp_alerts: []
+      - eval_time: 4800m
+        alertname: LogsPipelineRulesAbsent
+        exp_alerts: []
 
-  # Латентность: 65 % запросов медленнее 300 мс — burn 7x в 30m и 6h. Доля
-  # медленных за три дня (480 минут из 4320) даёт 0,58x, поэтому slow молчит,
-  # а fast (14,4x) не достигается.
-  - name: "65 % медленных запросов дольше 6 часов: горит только latency medium"
+  # Латентность: 65 % запросов укладываются в 300 мс (медленных 35 %) — burn 7x
+  # в 30m и 6h. Доля медленных за три дня (480 минут из 4320, по 35 %) даёт
+  # 0,78x, поэтому slow молчит, а fast (14,4x) не достигается.
+  - name: "65 % запросов быстрее 300 мс дольше 6 часов: горит только latency medium"
     interval: 1m
     input_series:
       - series: 'load_requests_total{job="demo-load",outcome="ok",namespace="demo"}'
@@ -443,6 +509,20 @@ tests:
         values: '0+100x4320 432000+65x480'
       - series: 'load_request_duration_seconds_count{job="demo-load",namespace="demo"}'
         values: '0+100x4800'
+      # Фикстуры сторожей: без них SloDemoNoTraffic и сторожа групп горят, и тест
+      # не доказывает, что горит только latency medium.
+      - series: 'up{job="demo-load",namespace="demo"}'
+        values: '1x4800'
+      - series: 'prometheus_rule_group_rules{rule_group="/etc/prometheus/rules/x.yaml;demo-slo.alerts.availability"}'
+        values: '2x4800'
+      - series: 'prometheus_rule_group_rules{rule_group="/etc/prometheus/rules/x.yaml;demo-slo.alerts.latency"}'
+        values: '2x4800'
+      - series: 'prometheus_rule_group_rules{rule_group="/etc/prometheus/rules/y.yaml;demo-alerting-path.heartbeat"}'
+        values: '3x4800'
+      - series: 'prometheus_rule_group_rules{rule_group="/etc/prometheus/rules/z.yaml;demo-logs-pipeline.loki"}'
+        values: '5x4800'
+      - series: 'prometheus_rule_group_rules{rule_group="/etc/prometheus/rules/z.yaml;demo-logs-pipeline.alloy"}'
+        values: '5x4800'
     alert_rule_test:
       - eval_time: 4800m
         alertname: SloDemoLatencyBurnMedium
@@ -465,6 +545,30 @@ tests:
       - eval_time: 4800m
         alertname: SloDemoLatencyBurnSlow
         exp_alerts: []
+      - eval_time: 4800m
+        alertname: SloDemoAvailabilityBurnFast
+        exp_alerts: []
+      - eval_time: 4800m
+        alertname: SloDemoAvailabilityBurnMedium
+        exp_alerts: []
+      - eval_time: 4800m
+        alertname: SloDemoAvailabilityBurnSlow
+        exp_alerts: []
+      - eval_time: 4800m
+        alertname: SloRulesAbsent
+        exp_alerts: []
+      - eval_time: 4800m
+        alertname: SloAlertRulesAbsent
+        exp_alerts: []
+      - eval_time: 4800m
+        alertname: SloDemoNoTraffic
+        exp_alerts: []
+      - eval_time: 4800m
+        alertname: AlertPathRulesAbsent
+        exp_alerts: []
+      - eval_time: 4800m
+        alertname: LogsPipelineRulesAbsent
+        exp_alerts: []
 
   # Медленный burn без всплеска: 94 % запросов укладываются в 300 мс три дня —
   # burn 1,2x за окно SLO, slow горит, fast и medium (1,2x < 14,4/6) молчат.
@@ -479,6 +583,19 @@ tests:
         values: '0+94x4320'
       - series: 'load_request_duration_seconds_count{job="demo-load",namespace="demo"}'
         values: '0+100x4320'
+      # Фикстуры сторожей, чтобы «горит только latency slow» было проверяемым.
+      - series: 'up{job="demo-load",namespace="demo"}'
+        values: '1x4320'
+      - series: 'prometheus_rule_group_rules{rule_group="/etc/prometheus/rules/x.yaml;demo-slo.alerts.availability"}'
+        values: '2x4320'
+      - series: 'prometheus_rule_group_rules{rule_group="/etc/prometheus/rules/x.yaml;demo-slo.alerts.latency"}'
+        values: '2x4320'
+      - series: 'prometheus_rule_group_rules{rule_group="/etc/prometheus/rules/y.yaml;demo-alerting-path.heartbeat"}'
+        values: '3x4320'
+      - series: 'prometheus_rule_group_rules{rule_group="/etc/prometheus/rules/z.yaml;demo-logs-pipeline.loki"}'
+        values: '5x4320'
+      - series: 'prometheus_rule_group_rules{rule_group="/etc/prometheus/rules/z.yaml;demo-logs-pipeline.alloy"}'
+        values: '5x4320'
     alert_rule_test:
       - eval_time: 4320m
         alertname: SloDemoLatencyBurnSlow
@@ -500,4 +617,28 @@ tests:
         exp_alerts: []
       - eval_time: 4320m
         alertname: SloDemoLatencyBurnMedium
+        exp_alerts: []
+      - eval_time: 4320m
+        alertname: SloDemoAvailabilityBurnFast
+        exp_alerts: []
+      - eval_time: 4320m
+        alertname: SloDemoAvailabilityBurnMedium
+        exp_alerts: []
+      - eval_time: 4320m
+        alertname: SloDemoAvailabilityBurnSlow
+        exp_alerts: []
+      - eval_time: 4320m
+        alertname: SloRulesAbsent
+        exp_alerts: []
+      - eval_time: 4320m
+        alertname: SloAlertRulesAbsent
+        exp_alerts: []
+      - eval_time: 4320m
+        alertname: SloDemoNoTraffic
+        exp_alerts: []
+      - eval_time: 4320m
+        alertname: AlertPathRulesAbsent
+        exp_alerts: []
+      - eval_time: 4320m
+        alertname: LogsPipelineRulesAbsent
         exp_alerts: []

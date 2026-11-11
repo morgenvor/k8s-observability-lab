@@ -148,8 +148,9 @@ spec:
               Группы demo-alerting-path.heartbeat нет в prometheus_rule_group_rules
               дольше 10 минут: PrometheusRule demo-alerting-path не применён, потерял
               метку release=monitoring или его не подхватил оператор. Пока это так,
-              молчание маршрута до sink никто не сторожит (AlertSinkHeartbeatMissing,
-              AlertSinkNeverReceived и AlertSinkTargetMissing не существуют), и тишина
+              молчание маршрута до sink никто не сторожит: правила
+              AlertSinkHeartbeatMissing, AlertSinkNeverReceived и AlertSinkTargetMissing
+              не вычисляются (их группы нет в памяти Prometheus), и тишина
               выглядит как норма. Проверь kubectl -n monitoring get prometheusrule
               demo-alerting-path, /api/v1/rules и лог оператора.
             runbook_url: "https://github.com/morgenvor/k8s-observability-lab/blob/main/docs/runbook.md#путь-уведомлений"
