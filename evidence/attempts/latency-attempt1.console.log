@@ -11,4 +11,4 @@
   - снять токсин latency_drill с прокси demo-api
   [2026-11-05T14:46:56Z] cleanup: инъекции сняты, порт-форварды закрыты
 ==> evidence: evidence/2026-11-05-latency.json
-WARN: дрилл latency: FAIL — см. /app/agent-workspace/k8s-observability-lab/evidence/2026-11-05-latency.json
+WARN: дрилл latency: FAIL — см. evidence/2026-11-05-latency.json

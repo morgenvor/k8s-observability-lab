@@ -12,4 +12,4 @@ jq: 1 compile error
   FAIL  last_terminated_reason: ожидалось OOMKilled, получено 
   [2026-11-05T14:49:59Z] cleanup: инъекции сняты, порт-форварды закрыты
 ==> evidence: evidence/2026-11-05-oomkill.json
-WARN: дрилл oomkill: FAIL — см. /app/agent-workspace/k8s-observability-lab/evidence/2026-11-05-oomkill.json
+WARN: дрилл oomkill: FAIL — см. evidence/2026-11-05-oomkill.json
