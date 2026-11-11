@@ -14,6 +14,21 @@
 
 ## Офлайн-ворота
 
+**2026-11-11, дерево с правками по финальному ревью: `./scripts/check.sh --strict` —
+`OK`, exit 0, пропусков нет.** 28 шагов верхнего уровня (25 явных `step` + три
+итерации `npm test`; с `--smoke`/`--images` — 29). Числа: 6 `PrometheusRule`, **49 правил
+(29 алертов: 25 `ticket` + 4 `page`), 11 групп**; `runbook_url 30, dashboard_url 6,
+logs_url 2`, анкоров в runbook 38, `page`-анкоров 4; `kustomize` 24 объекта
+(`Valid: 14`, `Skipped: 10`); `helmfile template` 134 объекта (`Valid: 89`,
+`Skipped: 45`); дашборды — 3 файла, 19 панелей, 8 самопроверок, метрик приложений 11
+(`alert-sink 5`); пять наборов `promtool test rules` — `SUCCESS`, покрытие «29 из 29»,
+срабатывающий кейс есть у всех 29 (добавлены сценарии medium/slow); тесты приложений
+21 + 16 + 12 = 49; новый шаг «ServiceMonitor'ы демо-контура» — 3 объекта,
+`release=monitoring`, селекторы совпадают с метками подов; сканы секретов и адресов —
+10 совпадений, все `example.invalid`/`example.com`. Кластер не использовался: живые
+проверки ниже относятся к предыдущим датам, новые правила `AlertPathRulesAbsent` и
+`LogsPipelineRulesAbsent` подтверждены только `promtool`.
+
 **2026-11-10, после правок по ревью: `./scripts/check.sh --strict --images` — `OK`,
 exit 0, пропусков нет.** 28 шагов (`--images` добавляет `docker build`), собраны
 `alert-sink:check`, `demo-api:check`, `demo-load:check` — это и есть доказательство прогона

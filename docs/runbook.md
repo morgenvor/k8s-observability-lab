@@ -56,13 +56,14 @@
 ./scripts/bootstrap-tools.sh
 ```
 
-Кладёт `helm`, `helmfile`, `kubectl`, `kubeconform`, `promtool` и плагин `helm-diff` в
-`.tools/` (вне git), версии пиннуются в скрипте. Повторный запуск идемпотентен.
-Офлайн-проверки проекта — одна команда:
+Кладёт `helm`, `helmfile`, `kubectl`, `kubeconform`, `promtool`, `alloy` (им проверяется
+конфиг Alloy в рендере) и плагин `helm-diff` в `.tools/` (вне git), версии пиннуются в
+скрипте вместе с sha256. Повторный запуск идемпотентен. Офлайн-проверки проекта — одна
+команда:
 
 ```bash
 ./scripts/check.sh            # без сборки образов
-./scripts/check.sh --images   # плюс docker build обеих приложений
+./scripts/check.sh --images   # плюс docker build всех трёх приложений
 ./scripts/check.sh --smoke    # плюс smoke фикстуры в docker (без кластера)
 CHECK_STRICT=1 ./scripts/check.sh   # как в CI: любой пропуск проверки — провал
 ```
@@ -120,12 +121,40 @@ containerd пишет на диск десятки секунд, API starve-ит
 
 ## 3. Доставка демо-контура
 
+**Предпосылки.** Кластер k3s уже есть: две ноды, встроенный Traefik (klipper-lb) и
+хранилище `local-path` для PVC Grafana, Prometheus и Loki. Установка самого k3s, CNI и
+storage-класса в проект не входит; доступ к кластеру — `KUBECONFIG` или
+`.secrets/kubeconfig` (раздел «Как адаптировать»).
+
+### Первая установка на пустом кластере
+
+Порядок важен: Loki монтирует ConfigMap правил ruler без `optional`, поэтому манифесты
+применяются раньше его релиза; `ServiceMonitor` Loki/Alloy требует CRD от
+`kube-prometheus-stack`, поэтому стек мониторинга ставится раньше логов.
+
+```bash
+./scripts/bootstrap-tools.sh                 # инструменты в .tools/ (вне git)
+./scripts/build-image.sh && ./scripts/import-image.sh   # образы на обе ноды (раздел 2)
+kubectl apply -k deploy/loki-rules           # ConfigMap loki-rules до старта Loki
+helmfile apply -l name=monitoring            # CRD, оператор и стек мониторинга
+helmfile apply -l name=loki -l name=alloy    # логи (values в helm/values/)
+# Secret alertmanager-smtp и четыре ALERT_EMAIL_*/SMTP_* — раздел «E-mail (SMTP)»:
+# без Secret deploy.sh останавливается до apply
+./scripts/deploy.sh
+```
+
+Последовательность собрана из проверенных по отдельности шагов; живьём как одна
+процедура она не прогонялась — первый прогон на пустом кластере и есть её проверка.
+
+### Обычная доставка
+
 ```bash
 ./scripts/deploy.sh
 ```
 
-Скрипт рендерит `deploy/base` + `deploy/dashboards` в `.tmp` (теги подставляет там же,
-трекаемый `kustomization.yaml` не меняется), применяет манифесты, ждёт rollout трёх
+Скрипт рендерит пять каталогов (`deploy/base`, `deploy/dashboards`, `deploy/loki-rules`,
+`deploy/monitoring`, `rules`) в `.tmp` (теги подставляет там же, трекаемый
+`kustomization.yaml` не меняется), применяет манифесты, ждёт rollout четырёх
 деплойментов, затем через порт-форвард к Prometheus проверяет, что все цели
 `up{job=~"demo-.*"}` равны 1 (до `WAIT_TARGETS` секунд — ServiceMonitor подхватывается
 оператором не мгновенно).
@@ -137,14 +166,18 @@ containerd пишет на диск десятки секунд, API starve-ит
 | `namespace/demo` | — | всё демо-содержимое отдельно от `monitoring` |
 | `deploy/demo-api` (2 реплики) | `demo` | фикстура с RED-метриками, `/metrics` |
 | `deploy/demo-load` | `demo` | нагрузка 5 rps через toxiproxy, клиентские метрики |
+| `deploy/alert-sink` | `demo` | приёмник уведомлений Alertmanager: `/timeline` и метрики доставки |
 | `deploy/toxiproxy` | `demo` | точка инъекции сетевых сбоев (API `:8474`, прокси `:12001`) |
-| `ServiceMonitor/demo-api`, `demo-load` | `demo` | скрейп с меткой `release: monitoring` |
+| `ServiceMonitor/demo-api`, `demo-load`, `alert-sink` | `demo` | скрейп с меткой `release: monitoring` (три объекта) |
 | `ConfigMap/demo-red` | `monitoring` | дашборд Grafana (sidecar по метке `grafana_dashboard=1`) |
 | `ConfigMap/slo-demo` | `monitoring` | дашборд SLO/burn rate, та же метка |
 | `ConfigMap/notifications` | `monitoring` | дашборд «Уведомления»: журнал `alert-sink` из Loki и метрики доставки, та же метка |
+| `ConfigMap/loki-rules` | `monitoring` | правило Loki ruler (том пода Loki) |
+| `AlertmanagerConfig/demo-notifications` | `monitoring` | дерево маршрутов уведомлений и шаблон письма |
 | `PrometheusRule/demo-slo`, `demo-slo-alerts` | `monitoring` | записывающие правила SLI и 6 burn-rate алертов |
-| `PrometheusRule/demo-infra`, `demo-meta` | `monitoring` | инфраструктурные и мета-алерты |
-| `PrometheusRule/demo-logs-pipeline` | `monitoring` | десять правил пайплайна логов Loki/Alloy и сторожей правила ruler (2026-11-07, дополнено 2026-11-10) |
+| `PrometheusRule/demo-infra`, `demo-meta` | `monitoring` | инфраструктурные и мета-алерты (включая сторожа групп правил) |
+| `PrometheusRule/demo-logs-pipeline` | `monitoring` | десять правил пайплайна логов Loki/Alloy и сторожей правила ruler |
+| `PrometheusRule/demo-alerting-path` | `monitoring` | три heartbeat-правила пути уведомлений |
 
 Правка `deploy/base/toxiproxy.json` подхватывается сама: конфиг собирается
 `configMapGenerator`, хеш попадает в имя ConfigMap и в pod template, поэтому
@@ -157,9 +190,14 @@ containerd пишет на диск десятки секунд, API starve-ит
 Применять корневой `kustomization.yaml` напрямую (`kubectl apply -k .`) нельзя: в нём
 заглушка `newTag: local`, поды уйдут в `ImagePullBackOff`. Штатный путь — `deploy.sh`.
 
-Откат (удаляет namespace `demo` целиком, дашборды `demo-red`/`slo-demo`/`notifications` и пять
-`PrometheusRule` в `monitoring` — то есть вместе с правилами уходит и SLO-оповещение;
-образы в containerd остаются):
+Откат удаляет **все объекты того же рендера**: namespace `demo` целиком (четыре
+деплоймента и три `ServiceMonitor`), три ConfigMap дашбордов, шесть `PrometheusRule`
+(`demo-slo`, `demo-slo-alerts`, `demo-infra`, `demo-meta`, `demo-logs-pipeline`,
+`demo-alerting-path`), `AlertmanagerConfig/demo-notifications` и ConfigMap `loki-rules`.
+Последствия: вместе с правилами уходит SLO-оповещение, **вместе с `AlertmanagerConfig` —
+весь маршрут уведомлений** (письма по `page|critical` и записи в `/timeline`
+прекращаются до повторного деплоя), а Loki после ближайшего рестарта не поднимется без
+ConfigMap правил. Образы в containerd остаются.
 
 ```bash
 ./scripts/rollback.sh        # спросит подтверждение
@@ -169,6 +207,10 @@ containerd пишет на диск десятки секунд, API starve-ит
 # уберёт файл, рестарт Grafana не нужен
 kubectl -n monitoring delete cm notifications
 ```
+
+Восстановление после полного отката — снова по порядку установки: Secret и env →
+`kubectl apply -k deploy/loki-rules` (вернуть том правил) → `./scripts/deploy.sh`
+(контур, маршрут, правила, дашборды). Релизы чартов откат не трогает.
 
 ### Проверка после деплоя
 
@@ -255,6 +297,8 @@ kubectl -n monitoring get ingress
   `/api/v1/alertmanagers`, а там pod IP (`<pod-ip>:9093`) — из браузера он не
   открывается. Силенсы создавать в UI Alertmanager.
 
+### Дашборды и метрики
+
 - Дашборд `demo — RED и латентность` (uid `demo-red`): RPS, доля ошибок (клиент/сервер),
   p95 по обеим гистограммам, доля запросов ≤ 300 мс (latency SLO) и панель «Логи demo
   (Loki)» — журнал всего namespace `demo` из Loki, новые строки сверху; поля JSON
@@ -264,10 +308,12 @@ kubectl -n monitoring get ingress
   аннотация сработавших алертов на таймлайне.
 - Дашборд `Уведомления — маршрут и alert-sink` (uid `notifications`): «Молчание маршрута»
   (сколько прошло с последнего уведомления; оранжевый порог 5,5 ч — тот же, что у
-  `AlertSinkHeartbeatMissing`), «Принято за окно», «Отказы sink» (не-ok исходы HTTP, включая
-  413), `up` цели, разбивка уведомлений по `severity` и таблица алертов по `alertname`/`status`.
-  Внизу — панель «Журнал уведомлений (Loki)»: те же события, что в `/timeline`, но из Loki,
-  поэтому журнал не пустеет после рестарта пода и хранится 72 ч.
+  `AlertSinkHeartbeatMissing`), «Принято с запуска пода» (счётчик сбрасывается вместе с
+  подом), «Отказы за 15 мин» (не-ok исходы HTTP, включая 413), `up` цели, разбивка
+  уведомлений по `severity` и таблица «Начало алерта по паре» (`alertname`/`status`,
+  время — `startsAt` алерта). Внизу — панель «Журнал уведомлений (Loki)»: те же события,
+  что в `/timeline`, но из Loki, поэтому журнал не пустеет после рестарта пода и хранится
+  72 ч.
 - Метрики приложения: `http_requests_total{method,route,status_class}`,
   `http_request_duration_seconds{method,route}` (бакеты с `0.3`), `http_inflight_requests`.
 - Метрики нагрузки: `load_requests_total{outcome="ok|error|timeout"}`,
@@ -284,7 +330,7 @@ kubectl -n monitoring get ingress
 # ПОРЯДОК: сначала манифесты (ConfigMap правил ruler), потом релизы чартов.
 # Обратный порядок ломает установку: под Loki монтирует ConfigMap `loki-rules` без
 # optional, и при его отсутствии остаётся в ContainerCreating (приём логов не работает).
-./scripts/deploy.sh                          # или: kubectl apply -k .  (создаёт loki-rules)
+./scripts/deploy.sh                          # создаёт и ConfigMap loki-rules
 helmfile apply -l name=loki -l name=alloy    # ставит оба релиза (values в helm/values/)
 kubectl -n monitoring get pods,pvc | grep -E 'loki|alloy'
 kubectl -n monitoring logs ds/alloy -c alloy --tail=20   # tailer'ы и ошибки записи
@@ -492,7 +538,7 @@ kubectl apply -k rules
 kubectl apply -k deploy/dashboards
 # что загрузилось и как себя чувствует: health есть у правил, у групп его нет —
 # здоровье группы видно по отсутствию lastError и свежести lastEvaluation
-kubectl -n monitoring get prometheusrule | grep -E 'demo-(slo|infra|meta|logs)'
+kubectl -n monitoring get prometheusrule | grep -E '^demo-'
 curl -s http://127.0.0.1:9090/api/v1/rules | jq '.data.groups[] | select(.name|startswith("demo-")) | {name, lastError, evaluationTime}'
 ```
 
@@ -698,11 +744,11 @@ Catch-all — страховка от нового или отсутствующ
   весь путь с параметрами — проверено `curl`-ом, а возврат на нужный вид после входа
   глазами ещё нет (`docs/verification.md`, «Ещё не подтверждено живьём»). Prometheus и
   Alertmanager отвечают без аутентификации (`/` → 200/302), Grafana — 401 на API.
-- **`startsAt` — не начало инцидента**, а момент, когда истёк `for` (2m). По коду Prometheus
-  в Alertmanager уходит `FiredAt` (`rules.SendAlerts`); живым алертом это ещё не
-  подтверждено — сейчас firing только `Watchdog` без `for`. Онсет раньше в любом случае:
-  окно burn rate (5m у доступности, 30m у латентности) должно было перерасти порог.
-  Поэтому окно ±15 минут, а не «минус for».
+- **`startsAt` — не начало инцидента**, а момент, когда истёк `for` (2m): в Alertmanager
+  уходит `FiredAt` (`rules.SendAlerts`), и живой дрилл `errors` 2026-11-10 это подтвердил
+  (`starts_at` 14:35:22Z при инъекции в 14:26:53Z; `docs/verification.md`).
+  Онсет раньше в любом случае: окно burn rate (5m у доступности, 30m у латентности)
+  должно было перерасти порог. Поэтому окно ±15 минут, а не «минус for».
 - **Ссылок на логи может не быть:** они появляются только у правил с аннотацией
   `logs_url` (сейчас — два page-правила SLO). У чартовых `critical` остаются ранбук
   апстрима, Source и Alertmanager — демо-панель для них бесполезна.
@@ -723,10 +769,13 @@ Catch-all — страховка от нового или отсутствующ
 **Порядок: Secret → конфиг.**
 
 ```bash
-# пароль не набираем в командной строке: она попадает в history и в список процессов
+# пароль не передаём аргументом: аргументы видны в `ps` и попадают в history.
+# --from-file=/dev/stdin читает значение из пайпа, а apply делает команду идемпотентной.
 read -rsp 'пароль приложения SMTP: ' SMTP_PASSWORD && printf '\n'
-kubectl -n monitoring create secret generic alertmanager-smtp \
-  --from-literal=smtp-password="${SMTP_PASSWORD}"
+printf '%s' "${SMTP_PASSWORD}" \
+  | kubectl -n monitoring create secret generic alertmanager-smtp \
+      --from-file=smtp-password=/dev/stdin --dry-run=client -o yaml \
+  | kubectl apply -f -
 unset SMTP_PASSWORD
 export ALERT_EMAIL_TO='alerts@<ваш-домен>'          # ящик человека для page|critical
 export ALERT_EMAIL_FROM='alertmanager@<ваш-домен>'  # обычно = логин SMTP
@@ -805,10 +854,11 @@ curl -sG http://127.0.0.1:9090/api/v1/query --data-urlencode \
 | ошибок нет, письма нет | письмо в «Спаме» или `from` не совпадает с логином (провайдер отбрасывает молча) | проверить ящик, выставить `ALERT_EMAIL_FROM` = логин SMTP |
 | горит `AlertmanagerFailedReload` | конфиг не загрузился, чаще всего из-за отсутствующего Secret | `kubectl -n monitoring logs sts/alertmanager-monitoring-kube-prometheus-alertmanager`, `/api/v2/status` |
 
-**Откат:** `git revert` коммита с маршрутом → `kubectl apply -k deploy/monitoring`
-(или `./scripts/deploy.sh`), затем `kubectl -n monitoring delete secret alertmanager-smtp`.
-После отката маршрут снова один (`всё → alert-sink`): письма перестают приходить,
-доставка в приёмник не страдает.
+**Откат:** `git revert` коммита с маршрутом → `./scripts/deploy.sh` с теми же
+`ALERT_EMAIL_*`/`SMTP_*` (он обновит только конфиг, адреса не затрёт; `kubectl apply -k
+deploy/monitoring` здесь не годится — см. выше), затем
+`kubectl -n monitoring delete secret alertmanager-smtp`. После отката маршрут снова один
+(`всё → alert-sink`): письма перестают приходить, доставка в приёмник не страдает.
 
 ### Дриллы: прерванный прогон
 
@@ -851,7 +901,7 @@ kubectl -n demo get endpointslices -l kubernetes.io/service-name=demo-api \
 | `up{job="demo-api"}` пусто | у ServiceMonitor нет метки `release: monitoring` или селектор не совпал с меткой Service | `kubectl -n demo get servicemonitor -o yaml`, сверить `selector.matchLabels` |
 | дашборда нет в Grafana | нет метки `grafana_dashboard=1` или sidecar не видит namespace | `kubectl -n monitoring get cm demo-red slo-demo notifications --show-labels`, логи контейнера `grafana-sc-dashboard` |
 | нет серий `slo:*` | `PrometheusRule` без метки `release=monitoring`, группа падает или оператор не перезагрузил правила | `kubectl -n monitoring get prometheusrule \| grep demo-`, `curl … /api/v1/rules` и поле `lastError` группы |
-| панель «Журнал уведомлений» пуста, а «Принято за окно» растёт | строки не доехали до Loki (Alloy, `stage.drop`, retention) — sink тут не при чём, в `/timeline` записи продолжают появляться | `kubectl -n monitoring logs ds/alloy -c alloy --tail=20`, запрос `{namespace="demo", app="alert-sink"}` в Explore |
+| панель «Журнал уведомлений» пуста, а «Принято с запуска пода» растёт | строки не доехали до Loki (Alloy, `stage.drop`, retention) — sink тут не при чём, в `/timeline` записи продолжают появляться | `kubectl -n monitoring logs ds/alloy -c alloy --tail=20`, запрос `{namespace="demo", app="alert-sink"}` в Explore |
 | в `/timeline` пусто | маршрут не подхвачен: `AlertmanagerConfig` не создан или не в `monitoring`, `matcherStrategy` не `None`, sink в `CrashLoop` | `kubectl -n monitoring get alertmanagerconfig`, сгенерированный конфиг (шаг 4), `kubectl -n demo logs deploy/alert-sink` |
 | `demo-load` считает `outcome="error"` | toxiproxy недоступен или прокси выключен | `kubectl -n demo port-forward svc/toxiproxy 8474:8474`, затем `GET /proxies` |
 | под demo-api бесконечно рестартует | падает проба или не хватает лимитов | `kubectl -n demo describe pod`, `kubectl -n demo logs <pod> --previous` |
@@ -876,7 +926,7 @@ kubectl -n demo get endpointslices -l kubernetes.io/service-name=demo-api \
 
 **Что означает `severity`:**
 
-| Метка | Кто ставит | Смысл | Куда идёт (v1.1) |
+| Метка | Кто ставит | Смысл | Куда идёт (текущая версия) |
 |---|---|---|---|
 | `page` | наш проект (`rules/demo-slo-alerts.yaml`, `rules/meta.yaml`) | пользователь страдает или вот-вот начнёт: горит бюджет ошибок/латентности, сторожа правил молчат | e-mail |
 | `critical` | чарт kube-prometheus-stack | отказ компонента стека (например, `AlertmanagerFailedReload`) | e-mail |
@@ -1200,8 +1250,9 @@ Page-сторож записанных серий: нет `slo:demo_availability
    — `0` значит «правило не вычисляется».
 4. Логи `config-reloader` в поде Prometheus и события PrometheusRule: ошибка загрузки
    правила или падение группы на вычислении.
-5. Починка: `./scripts/deploy.sh` (или `kubectl apply -k .`), затем проверить серии и
-   `ALERTS` через 1–2 интервала оценки.
+5. Починка: `./scripts/deploy.sh` (он создаст правила и дашборды; применять корневой
+   `kustomization.yaml` через `kubectl apply -k .` нельзя — см. раздел 3), затем проверить
+   серии и `ALERTS` через 1–2 интервала оценки.
 
 ### SloAlertRulesAbsent
 
@@ -1221,9 +1272,9 @@ Page-сторож со стороны страниц: записанные `slo:
 
 ### Сторожа правил и SLO (meta)
 
-Три сторожа в `rules/meta.yaml`, все про качество самого мониторинга, а не про
-пользователя. Два page-сторожа разобраны отдельно — `SloRulesAbsent` и
-`SloAlertRulesAbsent` выше; здесь то, что осталось общим:
+Пять правил в `rules/meta.yaml`: три про качество самого мониторинга (ниже) и два —
+  сторожа групп (в конце подраздела). Два page-сторожа разобраны отдельно —
+  `SloRulesAbsent` и `SloAlertRulesAbsent` выше; здесь то, что осталось общим.
 
 - `SloDemoNoTraffic` (ticket) — `demo-load` жив, но за 10 минут не отправил ни одного
   запроса — и так уже 15 минут (правило держит `for: 15m`); либо цель `demo-load`
@@ -1232,6 +1283,22 @@ Page-сторож со стороны страниц: записанные `slo:
   `ticket`, а не page: сервис не отказывает, это дефект генератора. `info` не годится:
   одиночный info глушит `InfoInhibitor` чарта, и такой алерт до sink не доходит
   (проверено 2026-11-10 на `CPUThrottlingHigh`).
+
+Отдельно — два сторожа **загрузки групп**, которые в git есть, а в кластере может не
+быть (реальный случай 2026-11-10: `PrometheusRule demo-alerting-path` отсутствовал, и
+heartbeat-правила не вычислялись вовсе):
+
+- `AlertPathRulesAbsent` (ticket) — группы `demo-alerting-path.heartbeat` нет в
+  `prometheus_rule_group_rules` дольше 10 минут: удалён `PrometheusRule`, снята метка
+  `release=monitoring` или оператор не подхватил объект. Сами heartbeat-правила об этом
+  не скажут: их нет. Разбор — раздел «Путь уведомлений»;
+- `LogsPipelineRulesAbsent` (ticket) — то же для групп `demo-logs-pipeline.*`: правила
+  пайплайна логов и сторожа правила ruler не вычисляются. Разбор — раздел «Пайплайн
+  логов».
+
+Сторожей нет у группы `demo-meta` (сам объект с этими правилами): «сторожа сторожа» здесь
+не заводится — отсутствие `prometheus_rule_group_rules` для неё видно только
+`deploy.sh` после apply и живой проверке в разделе «Правила Prometheus».
 
 Подробности про выгрузку правил для `promtool` и про то, почему сторожей два, —
 раздел «Правила Prometheus».
@@ -1273,6 +1340,12 @@ Page-сторож со стороны страниц: записанные `slo:
   `InfoInhibitor` чарта (проверено 2026-11-10).
 
 Как читать логи и метрики — разделы «Логи: Loki и Alloy» и «Метрики Loki и Alloy».
+
+**Сторож групп.** `LogsPipelineRulesAbsent` (`rules/meta.yaml`, `ticket`) проверяет, что
+группы `demo-logs-pipeline.loki` и `demo-logs-pipeline.alloy` вообще загружены: если
+`PrometheusRule demo-logs-pipeline` удалён или потерял метку `release=monitoring`, все
+десять правил молчат, и отличить это от «всё здорово» нечем. Разбор — как у остальных
+`*RulesAbsent`: `/api/v1/rules`, метка `release`, лог оператора.
 
 ### Правило по логам (Loki ruler)
 
@@ -1391,12 +1464,14 @@ ruler компонент оставляли ноль алертов — при �
 `AlertSinkNeverReceived` нужен аптайм 5,5 ч — sink, который рестартуют чаще, чем раз в
 5,5 ч, при сломанном маршруте не репортится. Второе: правила опираются на `Watchdog` от
 чарта; если его выключат или уведут в другой маршрут, `AlertSinkNeverReceived` начнёт
-ложно гореть через 5,5 ч аптайма.
+ложно гореть через 5,5 ч аптайма. Третье: если в кластере нет самого `PrometheusRule
+demo-alerting-path`, всех трёх правил нет — это ловит `AlertPathRulesAbsent`
+(`rules/meta.yaml`) по отсутствию группы `demo-alerting-path.heartbeat`.
 
 **Гигиена:** силенсы создаются **в UI Alertmanager** (`alertmanager.lab.internal`), не в
 Prometheus: кнопка «Silence» в UI Prometheus ведёт на pod IP, который из браузера не
 открывается. Силенс должен сопровождаться записью, почему и до какого времени; «заглушить
 навсегда» — способ потерять настоящий отказ.
 
-Аутентификации у UI нет — это ограничение лабы, а не настройка по умолчанию для
-продакшена.
+У Prometheus и Alertmanager аутентификации нет — это ограничение лабы, а не настройка по
+умолчанию для продакшена; Grafana требует логин (раздел «Доступ к UI»).
