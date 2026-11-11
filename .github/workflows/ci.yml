@@ -14,10 +14,18 @@ on:
 permissions:
   contents: read
 
+# Один прогон на ветку/PR: новый push отменяет предыдущий, иначе два `helmfile template`
+# и два `npm ci` конкурируют за раннер. timeout-minutes страхует от залипшего скачивания
+# чартов: без него прогон висит до общего лимита GitHub.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   checks:
     name: offline checks
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       # Пины по commit SHA (правило: тег — движущаяся цель). v4.4.0
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4.4.0
@@ -27,6 +35,10 @@ jobs:
       - name: Install lint tooling
         # pyyaml нужен шагу выгрузки PrometheusRule и ассертам scripts/checks (need_pyyaml).
         # Версии пинованы: обновление линтера не должно менять вердикт ворот само по себе.
+        # shellcheck и go не пинуются отдельно: они берутся из образа раннера, поэтому
+        # смена образа ubuntu-latest может изменить вердикт ворот без правки репозитория.
+        # Это осознанно: пин обоих (shellcheck — бинарником, go — toolchain-шагом)
+        # добавляет к каждому прогону загрузку, которая ничего не проверяет.
         run: python3 -m pip install --quiet yamllint==1.38.0 pyyaml==6.0.2
       - name: Install pinned tools
         run: ./scripts/bootstrap-tools.sh
