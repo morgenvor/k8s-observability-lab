@@ -50,4 +50,10 @@ groups:
           namespace: demo
         annotations:
           summary: "demo-api отвечает 5xx по логам (подробности — в строках http_request/request_failed)"
+          description: >-
+            За последние 5 минут в логах demo-api есть строки со status >= 500
+            (http_request или request_failed; /ready исключён — 503 при SIGTERM это
+            штатный дренаж). Смотри status, route и request_id в строках, затем
+            причину: ошибка приложения, ресурсы или сбой на пути клиента. Метрики
+            demo-api дают только класс ответа, детали есть лишь в логах.
           runbook_url: https://github.com/morgenvor/k8s-observability-lab/blob/main/docs/runbook.md#правило-по-логам-loki-ruler

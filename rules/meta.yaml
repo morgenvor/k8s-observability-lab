@@ -59,13 +59,11 @@ spec:
         # (demo-slo.alerts.availability и demo-slo.alerts.latency): если она не
         # загрузилась или падает, записанные slo:* остаются, а burn-rate алерты
         # молчат, и тишина снова выглядит как здоровый сервис. Остальные группы
-        # (demo-infra, demo-meta, demo-logs-pipeline, demo-alerting-path) проверяет
-        # только гейт деплоя scripts/deploy.sh — один раз после apply он сверяет
-        # число групп, выведенное из rules/*.yaml. Рантайм-сторожа у них нет: если
-        # группа исчезнет после выкатки
-        # (удалён PrometheusRule, сломался ruleSelector), этого не заметит никто.
-        # Ограничение записано осознанно: сторож «все 11 групп» требует способа задать
-        # ожидаемое число без дрейфа, иначе константа в выражении устареет молча.
+        # сторожат два правила ниже (demo-logs-pipeline.* и demo-alerting-path.*) —
+        # именно они сами являются сторожами, и их исчезновение означает слепоту.
+        # Без рантайм-сторожа остаются demo-infra.* и demo-meta.*: сторож «все
+        # группы» требует константы, которая устареет молча, а для инфраструктуры
+        # дублировать чартовые алерты смысла нет.
         # Правило по логам в Loki сторожат свои правила — rules/pipeline.yaml
         # (LokiRulerRulesMissing, LokiRulerEvaluationFailing).
         # Метка rule_group в Prometheus 3.15.1 — «<путь к файлу правил>;<имя группы>»
@@ -130,6 +128,52 @@ spec:
               поэтому дашборд выглядит зелёным, хотя оценивать нечего. Проверь под
               demo-load, его логи и load_ticks_skipped_total, а также конфиг toxiproxy.
             runbook_url: "https://github.com/morgenvor/k8s-observability-lab/blob/main/docs/runbook.md#сторожа-правил-и-slo-meta"
+
+        # Два точечных сторожа групп, которые сами являются сторожами: если группы
+        # нет в памяти Prometheus, то нет и её правил, и молчание выглядит как
+        # «всё хорошо». Константу «ожидаю N групп» не задаём — селектор по имени
+        # группы дрейф-фри. Реальный случай 2026-11-10: PrometheusRule
+        # demo-alerting-path не доехал до кластера, heartbeat-правил не было вовсе,
+        # и это нашлось только ручной сверкой.
+        - alert: AlertPathRulesAbsent
+          expr: sum(absent(prometheus_rule_group_rules{rule_group=~".*;demo-alerting-path[.]heartbeat"}))
+          for: 10m
+          labels:
+            severity: ticket
+            service: alert-sink
+            namespace: monitoring
+          annotations:
+            summary: "Heartbeat-правила пути уведомлений не загружены в Prometheus"
+            description: >-
+              Группы demo-alerting-path.heartbeat нет в prometheus_rule_group_rules
+              дольше 10 минут: PrometheusRule demo-alerting-path не применён, потерял
+              метку release=monitoring или его не подхватил оператор. Пока это так,
+              молчание маршрута до sink никто не сторожит (AlertSinkHeartbeatMissing,
+              AlertSinkNeverReceived и AlertSinkTargetMissing не существуют), и тишина
+              выглядит как норма. Проверь kubectl -n monitoring get prometheusrule
+              demo-alerting-path, /api/v1/rules и лог оператора.
+            runbook_url: "https://github.com/morgenvor/k8s-observability-lab/blob/main/docs/runbook.md#путь-уведомлений"
+        - alert: LogsPipelineRulesAbsent
+          expr: |
+            sum(absent(prometheus_rule_group_rules{rule_group=~".*;demo-logs-pipeline[.]loki"}))
+            or
+            sum(absent(prometheus_rule_group_rules{rule_group=~".*;demo-logs-pipeline[.]alloy"}))
+          for: 10m
+          labels:
+            severity: ticket
+            service: loki
+            namespace: monitoring
+          annotations:
+            summary: "Правила пайплайна логов не загружены в Prometheus"
+            description: >-
+              Групп demo-logs-pipeline.loki или demo-logs-pipeline.alloy нет в
+              prometheus_rule_group_rules дольше 10 минут: PrometheusRule
+              demo-logs-pipeline не применён, потерял метку release=monitoring или
+              упал. Тогда не работают ни алерты Loki/Alloy, ни сторожа самого правила
+              ruler — отказ приёма логов и потеря строк невидимы. Проверь
+              kubectl -n monitoring get prometheusrule demo-logs-pipeline,
+              /api/v1/rules и lastError группы.
+            runbook_url: "https://github.com/morgenvor/k8s-observability-lab/blob/main/docs/runbook.md#пайплайн-логов"
 
     # Троттлинг генератора — сторож того же класса, но с другой стороны: не
     # «правил нет», а «прибор врёт». SLI считаются по клиентским метрикам

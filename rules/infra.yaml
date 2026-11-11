@@ -36,9 +36,11 @@
 # корневой ФС (у чарта там 5 % статикой и прогнозы на 24 ч/4 ч). Почти-дубль ради
 # узкой полосы не заводим; метрики узла видит дашборд и NodeFilesystem* чарта.
 #
-# Контракт меток: severity ∈ {page, ticket, info}.
+# Контракт меток: severity ∈ {page, ticket}.
 # page — то, что требует реакции сейчас (SLO burn-rate и молчание правил); ticket —
-# инфраструктурное событие для планового разбора; info — контекст.
+# инфраструктурное событие для планового разбора. `info` не ставим: чартовый
+# InfoInhibitor глушит одиночный info в namespace, и такой алерт до sink не доходит
+# (проверено 2026-11-10); перечисление severity проверяет scripts/checks/rule_coverage.py.
 apiVersion: monitoring.coreos.com/v1
 kind: PrometheusRule
 metadata:

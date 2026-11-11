@@ -295,11 +295,12 @@ tests:
             exp_annotations:
               summary: "Alloy выбрасывает старые строки дольше 30 минут"
               description: >-
-                Фильтр stage.drop отбрасывает строки старше 50 минут непрерывно:
+                Фильтр stage.drop отбрасывает строки старше порога `older_than` из
+                helm/values/alloy.yaml непрерывно:
                 после рестарта Alloy это проходит за несколько минут, поэтому долгий
                 рост означает, что старыми стали живые строки. Проверь часы на нодах
-                и в поде (сравни timestamp строки с time()), порог older_than в
-                helm/values/alloy.yaml и не отстало ли чтение логов. Цена ошибки —
+                и в поде (сравни timestamp строки с time()), порог `older_than` в
+                values и не отстало ли чтение логов. Цена ошибки —
                 потеря логов demo/monitoring.
               runbook_url: "https://github.com/morgenvor/k8s-observability-lab/blob/main/docs/runbook.md#пайплайн-логов"
 

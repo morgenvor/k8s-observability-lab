@@ -71,9 +71,9 @@ tests:
         alertname: SloRulesAbsent
         exp_alerts: []
 
-  # Три дня здоровья, затем 15 минут полного отказа. Fast горит: 5m видит 60x,
+  # Три дня здоровья, затем 15 минут полного отказа. Fast горит: 5m видит 100x,
   # а 1h переваливает за 14,4x после 8,6 минут отказа. Medium молчит по существу:
-  # в шестичасовом окне отказ занимает 15 из 360 минут (burn 4,2x при пороге 6x),
+  # в шестичасовом окне отказ занимает 15 из 360 минут (burn ≈3,9x при пороге 6x),
   # то есть выражение ложно, а не «ещё не выдержало for». Slow тоже молчит
   # (15 из 4320 минут).
   - name: "3 дня здоровья + 15 минут отказа: горит только fast"
@@ -386,4 +386,118 @@ tests:
         exp_alerts: []
       - eval_time: 30m
         alertname: SloRulesAbsent
+        exp_alerts: []
+
+  # --- Срабатывающие кейсы medium/slow --------------------------------------
+  # До этого у трёх алертов были только «молчащие» тесты: сломанное выражение,
+  # которое никогда не станет истинным, проходило ворота. Сценарии подобраны так,
+  # чтобы горел ровно один алерт: доля ошибок 7 % даёт burn 7x во всех коротких
+  # окнах, те же 7 % за 480 минут в трёхдневном окне — 0,78x (slow молчит),
+  # а fast (14,4x) не достигается.
+  - name: "7 % ошибок дольше 6 часов: горит только availability medium"
+    interval: 1m
+    input_series:
+      - series: 'load_requests_total{job="demo-load",outcome="ok",namespace="demo"}'
+        values: '0+300x4320 1296000+279x480'
+      - series: 'load_requests_total{job="demo-load",outcome="error",namespace="demo"}'
+        values: '0+0x4320 0+21x480'
+      - series: 'load_request_duration_seconds_bucket{job="demo-load",le="0.3",namespace="demo"}'
+        values: '0+300x4800'
+      - series: 'load_request_duration_seconds_count{job="demo-load",namespace="demo"}'
+        values: '0+300x4800'
+    alert_rule_test:
+      - eval_time: 4800m
+        alertname: SloDemoAvailabilityBurnMedium
+        exp_alerts:
+          - exp_labels:
+              severity: ticket
+              service: demo-api
+              namespace: demo
+              slo: availability
+            exp_annotations:
+              summary: "demo-api: устойчивый расход бюджета доступности (SLO 99 %)"
+              description: >-
+                Burn rate доступности выше 6x в окнах 30m и 6h: за 6 часов такого
+                расхода уходит ~50 % бюджета. Нужен тикет на разбор, а не
+                немедленная реакция.
+              runbook_url: "https://github.com/morgenvor/k8s-observability-lab/blob/main/docs/runbook.md#slo-доступности-burn-rate-fast-medium-и-slow"
+              dashboard_url: "http://grafana.lab.internal/d/demo-slo"
+      - eval_time: 4800m
+        alertname: SloDemoAvailabilityBurnFast
+        exp_alerts: []
+      - eval_time: 4800m
+        alertname: SloDemoAvailabilityBurnSlow
+        exp_alerts: []
+
+  # Латентность: 65 % запросов медленнее 300 мс — burn 7x в 30m и 6h. Доля
+  # медленных за три дня (480 минут из 4320) даёт 0,58x, поэтому slow молчит,
+  # а fast (14,4x) не достигается.
+  - name: "65 % медленных запросов дольше 6 часов: горит только latency medium"
+    interval: 1m
+    input_series:
+      - series: 'load_requests_total{job="demo-load",outcome="ok",namespace="demo"}'
+        values: '0+100x4320 432000+100x480'
+      - series: 'load_requests_total{job="demo-load",outcome="error",namespace="demo"}'
+        values: '0+0x4800'
+      - series: 'load_request_duration_seconds_bucket{job="demo-load",le="0.3",namespace="demo"}'
+        values: '0+100x4320 432000+65x480'
+      - series: 'load_request_duration_seconds_count{job="demo-load",namespace="demo"}'
+        values: '0+100x4800'
+    alert_rule_test:
+      - eval_time: 4800m
+        alertname: SloDemoLatencyBurnMedium
+        exp_alerts:
+          - exp_labels:
+              severity: ticket
+              service: demo-api
+              namespace: demo
+              slo: latency
+            exp_annotations:
+              summary: "demo-api: устойчивый расход бюджета латентности (SLO 95 %)"
+              description: >-
+                Burn rate латентности выше 6x в окнах 30m и 6h: медленных запросов
+                стабильно больше, чем позволяет бюджет 5 %. Тикет на разбор.
+              runbook_url: "https://github.com/morgenvor/k8s-observability-lab/blob/main/docs/runbook.md#slo-латентности-burn-rate-fast-medium-и-slow"
+              dashboard_url: "http://grafana.lab.internal/d/demo-slo"
+      - eval_time: 4800m
+        alertname: SloDemoLatencyBurnFast
+        exp_alerts: []
+      - eval_time: 4800m
+        alertname: SloDemoLatencyBurnSlow
+        exp_alerts: []
+
+  # Медленный burn без всплеска: 94 % запросов укладываются в 300 мс три дня —
+  # burn 1,2x за окно SLO, slow горит, fast и medium (1,2x < 14,4/6) молчат.
+  - name: "6 % медленных запросов три дня: горит только latency slow"
+    interval: 1m
+    input_series:
+      - series: 'load_requests_total{job="demo-load",outcome="ok",namespace="demo"}'
+        values: '0+100x4320'
+      - series: 'load_requests_total{job="demo-load",outcome="error",namespace="demo"}'
+        values: '0+0x4320'
+      - series: 'load_request_duration_seconds_bucket{job="demo-load",le="0.3",namespace="demo"}'
+        values: '0+94x4320'
+      - series: 'load_request_duration_seconds_count{job="demo-load",namespace="demo"}'
+        values: '0+100x4320'
+    alert_rule_test:
+      - eval_time: 4320m
+        alertname: SloDemoLatencyBurnSlow
+        exp_alerts:
+          - exp_labels:
+              severity: ticket
+              service: demo-api
+              namespace: demo
+              slo: latency
+            exp_annotations:
+              summary: "demo-api: бюджет латентности сгорает за окно SLO (95 %)"
+              description: >-
+                За 3 дня расход бюджета латентности выше 1x: при таких темпах
+                бюджет 5 % закончится к концу окна. Плановая работа с SLO.
+              runbook_url: "https://github.com/morgenvor/k8s-observability-lab/blob/main/docs/runbook.md#slo-латентности-burn-rate-fast-medium-и-slow"
+              dashboard_url: "http://grafana.lab.internal/d/demo-slo"
+      - eval_time: 4320m
+        alertname: SloDemoLatencyBurnFast
+        exp_alerts: []
+      - eval_time: 4320m
+        alertname: SloDemoLatencyBurnMedium
         exp_alerts: []
