@@ -1,9 +1,8 @@
 # Runbook — k8s-observability-lab
 
-Процедуры для лабы: как поставить инструменты, доставить демо-контур в k3s и что делать,
-если что-то не отвечает. Правила и архитектура проекта и история решений ведутся в
-рабочих документах (`AGENTS.md`, `CHANGELOG.md`) — они в публикуемый набор не входят;
-здесь только процедуры и проверки.
+Процедуры для стенда: как поставить инструменты, доставить демо-контур в k3s и что делать,
+если что-то не отвечает. Здесь только процедуры и проверки; архитектура и принятые
+решения видны из манифестов, правил и истории коммитов.
 
 Доступ к кластеру и к нодам — файлы в каталоге `.secrets/` рядом с проектом. Каталог
 в `.gitignore`: ни kubeconfig, ни ssh-конфиг в git не попадают, и в публикуемом наборе
@@ -141,10 +140,10 @@ containerd пишет на диск десятки секунд, API starve-ит
 | `deploy/toxiproxy` | `demo` | точка инъекции сетевых сбоев (API `:8474`, прокси `:12001`) |
 | `ServiceMonitor/demo-api`, `demo-load` | `demo` | скрейп с меткой `release: monitoring` |
 | `ConfigMap/demo-red` | `monitoring` | дашборд Grafana (sidecar по метке `grafana_dashboard=1`) |
-| `ConfigMap/slo-demo` | `monitoring` | дашборд SLO/burn rate (фаза 3), та же метка |
-| `ConfigMap/notifications` | `monitoring` | дашборд «Уведомления» (v1.1): журнал `alert-sink` из Loki и метрики доставки, та же метка |
-| `PrometheusRule/demo-slo`, `demo-slo-alerts` | `monitoring` | записывающие правила SLI и 6 burn-rate алертов (фаза 3) |
-| `PrometheusRule/demo-infra`, `demo-meta` | `monitoring` | инфраструктурные и мета-алерты (фаза 3) |
+| `ConfigMap/slo-demo` | `monitoring` | дашборд SLO/burn rate, та же метка |
+| `ConfigMap/notifications` | `monitoring` | дашборд «Уведомления»: журнал `alert-sink` из Loki и метрики доставки, та же метка |
+| `PrometheusRule/demo-slo`, `demo-slo-alerts` | `monitoring` | записывающие правила SLI и 6 burn-rate алертов |
+| `PrometheusRule/demo-infra`, `demo-meta` | `monitoring` | инфраструктурные и мета-алерты |
 | `PrometheusRule/demo-logs-pipeline` | `monitoring` | десять правил пайплайна логов Loki/Alloy и сторожей правила ruler (2026-11-07, дополнено 2026-11-10) |
 
 Правка `deploy/base/toxiproxy.json` подхватывается сама: конфиг собирается
@@ -171,7 +170,7 @@ containerd пишет на диск десятки секунд, API starve-ит
 kubectl -n monitoring delete cm notifications
 ```
 
-### Приёмка после деплоя
+### Проверка после деплоя
 
 Что `deploy.sh` проверяет сам: `up == 1` у двух эндпоинтов `demo-api`, у `demo-load` и
 `alert-sink`; живой ok-трафик; загрузку всех групп правил проекта; что сторож
@@ -277,9 +276,9 @@ kubectl -n monitoring get ingress
   `slo:demo_latency:ratio_<окно>` (доля ≤ 300 мс) и `...:burn_rate_<окно>`; окна —
   `5m`, `1h`, `30m`, `6h`, `3d`. Метки `service="demo-api"`, `slo="availability|latency"`.
 - Логи приложений — stdout подов (`kubectl -n demo logs deploy/demo-api`), каждая строка
-  JSON. Сбор в Loki — раздел «Логи (фаза 5)» ниже.
+  JSON. Сбор в Loki — раздел «Логи: Loki и Alloy» ниже.
 
-### Логи: Loki и Alloy (фаза 5)
+### Логи: Loki и Alloy
 
 ```bash
 # ПОРЯДОК: сначала манифесты (ConfigMap правил ruler), потом релизы чартов.
@@ -295,7 +294,7 @@ kubectl -n monitoring port-forward svc/loki 3100:3100
 #   http://127.0.0.1:3100/loki/api/v1/query_range?query={namespace="demo"}
 #   http://127.0.0.1:3100/metrics  → loki_ingester_memory_streams (кардинальность)
 #   http://127.0.0.1:3100/config   → живой конфиг (retention_period, compactor)
-#   http://127.0.0.1:3100/prometheus/api/v1/rules → правила ruler (фаза 5 v1.1)
+#   http://127.0.0.1:3100/prometheus/api/v1/rules → правила ruler
 ```
 
 - В Grafana datasource `loki` (`uid: loki`, URL `http://loki.monitoring.svc:3100`) приезжает
@@ -358,7 +357,7 @@ kubectl -n monitoring port-forward svc/loki 3100:3100
   сам конфиг бинарём Alloy той же версии, что образ в кластере: синтаксис, неизвестные
   свойства и несуществующие компоненты.
 
-### Правила Loki ruler (фаза 5 v1.1)
+### Правила Loki ruler
 
 Ruler — компонент внутри того же пода Loki (`-target=all`), который исполняет правила
 по логам и отправляет результат в Alertmanager. Это второй класс проверки после
@@ -485,7 +484,7 @@ kubectl -n monitoring get deploy monitoring-grafana -o jsonpath='{.spec.strategy
   это приемлемо; для «настоящего» Grafana нужен либо `StatefulSet` с бэкапом БД, либо
   внешняя БД.
 
-### Правила Prometheus (фаза 3)
+### Правила Prometheus
 
 ```bash
 # применить/обновить правила и дашборды (полный путь — ./scripts/deploy.sh)
@@ -525,7 +524,7 @@ curl -s http://127.0.0.1:9090/api/v1/rules | jq '.data.groups[] | select(.name|s
   `demo-slo-alerts` не загрузилась или падает: смотри `/api/v1/rules` и `lastError`,
   метку `release=monitoring` у PrometheusRule `demo-slo-alerts`. `scripts/deploy.sh`
   проверяет тот же селектор сразу после apply, чтобы неверный формат метки не дал
-  ложный page (проверка через 10 минут после apply — раздел «Приёмка после деплоя»).
+  ложный page (проверка через 10 минут после apply — раздел «Проверка после деплоя»).
 - Своих инфраструктурных правил четырнадцать: `KubePodOOMKilled`, `PVCNearlyFull` (>85 %
   занято, без прогноза роста), `NodeMemoryAvailableLow` (<15 % свободной памяти узла) и
   `DemoTargetDownFast` (цель недоступна дольше 2 минут)
@@ -540,9 +539,9 @@ curl -s http://127.0.0.1:9090/api/v1/rules | jq '.data.groups[] | select(.name|s
   (`absent(up)`) — разные сигналы: при удалённом поде/объекте серия `up` исчезает, и
   `up == 0` не сработает никогда. Проверка логики — `rules/tests/pipeline.test.yaml`
   (promtool); живая проверка «Loki пропал» 2026-11-07 дала firing `LokiTargetMissing`
-  и доставку в `/timeline` (см. CHANGELOG).
+  и доставку в `/timeline` (см. `docs/verification.md`).
 
-### Маршрут уведомлений и alert-sink (фаза 4)
+### Маршрут уведомлений и alert-sink
 
 ```bash
 # применить маршрут (AlertmanagerConfig в monitoring) и сам sink
@@ -575,7 +574,7 @@ kubectl -n demo port-forward svc/alert-sink 8080:8080
   каждого алерта в лог не попадают (там `Имя:статус`) — за ними в UI Alertmanager или в
   `/timeline`; drill-evidence по-прежнему берётся из JSON `/timeline`, а не из логов.
 - Метрики sink в Prometheus: `alertsink_notifications_total` и `up{job="alert-sink"}`
-  (цель добавлена сверх плана фазы 4, иначе метрики живут только в поде).
+  (цель добавлена отдельно, иначе метрики доставки живут только в самом поде).
 - Время события в счётчиках sink нет, поэтому таблица «Алерты с запуска пода» из дашборда
   убрана: в instant-запросе Grafana подставляла в колонку `Time` момент запроса, а не время
   алерта, и таблица с теми же строками рядом с настоящим временем была дублем. Когда начался
@@ -839,8 +838,8 @@ kubectl -n demo get endpointslices -l kubernetes.io/service-name=demo-api \
 лабе (две VM), и его состояние — состояние лабы, а не ошибка скриптов.
 
 1. Проверь `kubectl get nodes --request-timeout=10s` с `KUBECONFIG` из лабы.
-2. Если пусто/таймаут — VM лабы, скорее всего, остановлены: их старт — действие владельца
-   стенда, а не часть этого проекта.
+2. Если пусто/таймаут — VM лабы, скорее всего, остановлены: их запускает администратор
+   стенда, это не часть проекта.
 3. После старта ничего пересобирать не нужно: образы в containerd сохраняются между
    перезапусками, `deploy.sh` идемпотентен.
 
@@ -863,7 +862,7 @@ kubectl -n demo get endpointslices -l kubernetes.io/service-name=demo-api \
 | дашборда/панели логов нет в Grafana | datasource `loki` не подхвачен sidecar | `kubectl -n monitoring logs deploy/monitoring-grafana -c grafana-sc-datasources \| tail`, `GET /api/datasources` — должен быть `loki` |
 | Loki отвечает 400 на push | `limits_config` (например, отбрасывание старых записей) или `schemaConfig` не совпадает с хранилищем | `kubectl -n monitoring port-forward svc/loki 3100:3100`, затем `GET /config`, логи `loki-0` |
 | Grafana `Init:ImagePullBackOff` на `init-chown-data` | чарт добавил init-контейнер `busybox:1.38.0` (chown PVC), а в registry лабы его нет | `IMPORT_IMAGES="busybox:1.38.0" ./scripts/import-image.sh` |
-| Grafana в `CrashLoopBackOff` после включения PVC, в логах `permission denied` на `/var/lib/grafana` | init-контейнер не отработал или том принадлежит другому UID | `kubectl -n monitoring logs <pod> -c init-chown-data`, `ls -ln` каталога PV на ноде: владелец должен быть `472:472` |
+| Grafana в `CrashLoopBackOff` после включения PVC, в логах `permission denied` на `/var/lib/grafana` | init-контейнер не отработал или том принадлежит другому UID | `kubectl -n monitoring logs <pod> -c init-chown-data`, `ls -ln` каталога PV на ноде: каталог должен принадлежать `472:472` |
 | горит `LokiTargetMissing` / `AlloyTargetMissing` | цели нет: удалён объект, выключен `ServiceMonitor`, у Service нет эндпоинтов | `kubectl -n monitoring get servicemonitor loki alloy`, `get endpoints loki alloy`, `get sts loki`/`get ds alloy` |
 | горит `LokiDown` / `AlloyDown` | цель есть, но `/metrics` не отвечает: зависший процесс, лимит памяти, ошибка контейнера | `kubectl -n monitoring logs <pod> --tail=50`, `describe pod`, `kubectl top pod` |
 | горит `AlloyDroppedLogs` | Alloy выбрасывает записи: `queue_is_full` (Loki не успевает), `rate_limited`, `ingester_error` | `kubectl -n monitoring logs ds/alloy`, метрика по `reason`, проверить `LokiNotIngesting` и PVC Loki |
@@ -945,7 +944,7 @@ kubectl -n demo get pods -o wide
 kubectl -n demo port-forward svc/toxiproxy 8474:8474 &
 curl -s http://127.0.0.1:8474/proxies \
   | jq 'to_entries[] | {proxy: .key, enabled: .value.enabled, toxics: [.value.toxics[].name]}'
-kill %1   # порт-форвард — фоновый процесс этой сессии, иначе останется висеть
+kill %1   # порт-форвард — фоновый процесс текущего терминала, иначе останется висеть
 ```
 
 Перед действием проверь, что это не дрилл: свежий каталог `evidence/`, время в его
@@ -1235,7 +1234,7 @@ Page-сторож со стороны страниц: записанные `slo:
   (проверено 2026-11-10 на `CPUThrottlingHigh`).
 
 Подробности про выгрузку правил для `promtool` и про то, почему сторожей два, —
-раздел «Правила Prometheus (фаза 3)».
+раздел «Правила Prometheus».
 
 ### Пайплайн логов
 
@@ -1337,7 +1336,7 @@ ruler компонент оставляли ноль алертов — при �
 
 ### Путь уведомлений
 
-**Статус: реализовано** (Phase 4 плана v1.1). Все три правила живут в
+**Статус: реализовано.** Все три правила живут в
 `rules/notifications.yaml` и ссылаются на этот подраздел через `runbook_url`; у чарта
 сигнала о полном молчании маршрута нет.
 

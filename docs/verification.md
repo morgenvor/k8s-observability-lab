@@ -14,11 +14,11 @@
 
 ## Офлайн-ворота
 
-**2026-11-10, после правок по ревью фаз 7–9: `./scripts/check.sh --strict --images` — `OK`,
+**2026-11-10, после правок по ревью: `./scripts/check.sh --strict --images` — `OK`,
 exit 0, пропусков нет.** 28 шагов (`--images` добавляет `docker build`), собраны
 `alert-sink:check`, `demo-api:check`, `demo-load:check` — это и есть доказательство прогона
-`--images`, которого не осталось от фазы 7 (лог `.tmp/check-images.log` был позже перезаписан
-прогоном без флага; найдено ревью). Лог — `.tmp/check-images-2026-11-10.log` (вне git).
+`--images`: лог предыдущей попытки был позже перезаписан прогоном без флага (найдено
+ревью). Лог — `.tmp/check-images-2026-11-10.log` (вне git).
 Числа: 47 правил / 27 алертов / 11 групп, `runbook_url 28, dashboard_url 6, logs_url 2`,
 анкоров 35, `kustomize` 24 объекта (`Valid: 14`), `helmfile template` 134 (`Valid: 89`),
 дашборды 3 файла / 19 панелей / 8 самопроверок, скан адресов 10 — все
@@ -26,8 +26,8 @@ exit 0, пропусков нет.** 28 шагов (`--images` добавляе�
 добавился отдельный абзац со ссылкой на стенд вне цикла по алертам и унифицированная подпись),
 шаг проверяет четыре фикстуры, включая письмо из двух алертов.
 
-**2026-11-10, финальный прогон Phase 9 на дереве с правками документов (HEAD `8acbdb3` +
-README, `docs/publish.md`, этот файл): `./scripts/check.sh --strict` — `OK`, exit 0,
+**2026-11-10, финальный прогон на дереве с правками документов (HEAD `8acbdb3` +
+README и этот файл): `./scripts/check.sh --strict` — `OK`, exit 0,
 пропусков нет.** 27 шагов верхнего уровня, ни один не ушёл в «пропущено»; логи прогонов —
 `.tmp/check-phase9-*.log` (вне git). Прогон повторён после последней правки документов, числа
 совпали. *Этот прогон — до правок по ревью (шаблон письма тогда давал `html` 1284 символа);
@@ -39,10 +39,10 @@ runbook 35, `page`-анкоров 4; `kustomize` 24 объекта (`Valid: 14`,
 `promtool test rules` — `SUCCESS`, покрытие «27 из 27» (со срабатывающим кейсом 24); тесты
 приложений 20 + 16 + 12; `yamllint --strict` — 30 файлов; скан адресов — 10 совпадений, все
 `example.invalid`/`example.com`. Кластер не использовался. Живые проверки после этого прогона
-не повторялись и не нужны: фаза 9 меняла только документы, поведение правил, маршрута, письма
+не повторялись и не нужны: правки касались только документов, поведение правил, маршрута, письма
 и логов не тронуто.
 
-**2026-11-10, приёмка `v1.1` на HEAD `bdd4613` (тот же день, коммиты после записи ниже:
+**2026-11-10, финальная проверка `v1.1` на HEAD `bdd4613` (тот же день, коммиты после записи ниже:
 шаг «шаблон письма», правки ассертов по ревью): `./scripts/check.sh --strict` — `OK`,
 пропусков нет; `CHECK_STRICT=1 ./scripts/check.sh --smoke` — `OK` + `SMOKE OK`;
 `./scripts/check.sh --images` — `OK`.** Шагов верхнего уровня теперь 27 без `--smoke` и 28
@@ -58,8 +58,8 @@ runbook 35, `page`-анкоров 4; `kustomize` 24 объекта (`Valid: 14`,
 (`alert-sink:check`, `demo-api:check`, `demo-load:check`). Кластер не использовался.
 Проверять наличие и вид скриншотов ворота не умеют: на момент этого прогона
 `docs/images/demo-red.png` и `slo-demo.png` отсутствовали, а `alert-email.png` был снят с
-упрощённым письмом — тогда это был открытый шаг приёмки, а не «зелёное». В тот же день кадры
-получены от владельца и закоммичены (`docs(images)`, `70e3c4f`); содержимое кадров проверено
+упрощённым письмом — тогда это был открытый шаг проверки, а не «зелёное». В тот же день кадры
+добавлены в репозиторий (`docs(images)`, `70e3c4f`); содержимое кадров проверено
 глазами, а не воротами — строка таблицы «Живые проверки» ниже.
 
 **2026-11-10, `./scripts/check.sh` на дереве с шагом «покрытие правил тестами и enum
@@ -99,7 +99,7 @@ severity»: `OK`, пропусков нет.** Шагов верхнего ур�
 Без флагов тот же HEAD даёт `OK` и не требует docker: `--smoke` — единственное, что
 запускает контейнеры. Негативные прогоны новых ассертов (мутации рендера: `OnNamespace`,
 непустой селектор, снятая метка `release`, `pipeline.yaml` вне `resources`, оверлей без
-объекта) — все пять падают с ожидаемым сообщением; подробности в `CHANGELOG.md`.
+объекта) — все пять падают с ожидаемым сообщением; подробности — в истории коммитов.
 
 **2026-11-07, `./scripts/check.sh --images` на HEAD `b8ef241`: `OK`, код возврата 0,
 пропусков нет** (ни один шаг не ушёл в «пропущено»: `docker`, `shellcheck` и `yamllint`
@@ -130,7 +130,7 @@ severity»: `OK`, пропусков нет.** Шагов верхнего ур�
 (три child-route, `continue`, catch-all, подстановка адресов двумя рендерами) и «скан
 личных адресов» (10 адресов, все в `example.invalid`).
 
-Прогон 2026-11-08 (HEAD `5e7634f`, Phase 4): `OK`, пропусков нет; 28 файлов yamllint,
+Прогон 2026-11-08 (HEAD `5e7634f`): `OK`, пропусков нет; 28 файлов yamllint,
 41 правило в 6 файлах (6 + 20 + 3 + 3 + 2 + 7), пять наборов `promtool test rules` —
 `SUCCESS`, ссылок `runbook_url 21, dashboard_url 6`, анкоров 23, `kustomize` 22 объекта,
 `helmfile template` 134 объекта. Проверка новых правил не сводится к «тесты зелёные»:
@@ -150,7 +150,7 @@ catch-all. Те же мутации, что и в предыдущем прог�
 (`vector(1)` и `vector(0)` вместо `absent`) — каждая роняет свой кейс. Чарты снова из
 локальных копий: GitHub отдавал `504` на `releases/download`.
 
-Прогон 2026-11-08 (Phase 5 — Loki ruler): `OK`, пропусков нет; 30 файлов yamllint, 42
+Прогон 2026-11-08 (Loki ruler): `OK`, пропусков нет; 30 файлов yamllint, 42
 правила в 6 файлах (6 + 20 + 3 + 3 + 3 + 7) плюс правило Loki ruler (его promtool не
 разбирает: `| json` — не PromQL, структуру проверяет шаг «Loki ruler в рендере»), ссылок
 `runbook_url 23, dashboard_url 6` (новый алерт проверяется тем же шагом анкоров), анкоров
@@ -196,11 +196,11 @@ rules` — `SUCCESS`. Чарты снова из локальных копий (
 состояние SLI до/во время/после (`availability_ratio_5m_*`, `latency_ratio_5m_*`) и теги
 образов, на которых шёл дрилл.
 
-**Повтор `errors` 2026-11-10 (приёмка v1.1): `passed`**, `evidence/2026-11-10-errors.json`,
+**Повтор `errors` 2026-11-10 (финальная проверка v1.1): `passed`**, `evidence/2026-11-10-errors.json`,
 8 утверждений, реакция 519 с, восстановление 268 с. Отличие от прогона 2026-11-05 —
 предмет проверки: в этот раз смотрели `starts_at` уведомления (`14:35:22Z` при инъекции в
 `14:26:53Z`, то есть FiredAt, а не начало отказа) и оба письма — `firing` и `resolved`.
-Правило `DemoApi5xxFromLogs` при этом молчало, как и предсказано планом: `reset_peer` рвёт
+Правило `DemoApi5xxFromLogs` при этом молчало, как и ожидалось: `reset_peer` рвёт
 соединение до приложения, 5xx в логах не появляется.
 
 ## Живые проверки стенда
@@ -221,7 +221,7 @@ rules` — `SUCCESS`. Чарты снова из локальных копий (
 | 2026-11-08 | маршрут по `severity` | сгенерированный конфиг Alertmanager, `/api/v2/alerts`, `/timeline` | дерево доехало: `severity=~"page|critical"` → `email` (`continue: true`), `ticket|info|warning|none` → `alert-sink`, catch-all → `alert-sink`; проба `page` получила получателей `email` + `alert-sink`, проба `ticket` — только `alert-sink` |
 | 2026-11-08 | доставка e-mail | `/metrics` Alertmanager (напрямую из пода), гейт `deploy.sh` | `alertmanager_notifications_total{integration="email"} = 1`, `failed_total{integration="email"}` (все причины) `= 0` — SMTP принял письмо; `alertmanager_config_last_reload_successful = 1` сразу после apply |
 | 2026-11-08 | egress до SMTP | `nc -z <smtp-host> 587` с рабочей машины и из пода Alertmanager | порт открыт в обоих местах; проверено до apply — закрытый egress делает ветку e-mail нерабочей при любом конфиге |
-| 2026-11-08 | вручение письма | скриншот из ящика (`docs/images/alert-email.png`) | письмо получено: в кадре тело уведомления по `page`-пробе, личных адресов нет; снял владелец. Файл **заменён 2026-11-10** кадром нового шаблона (строка ниже) — здесь описан кадр от 08.11 |
+| 2026-11-08 | вручение письма | скриншот из ящика (`docs/images/alert-email.png`) | письмо получено: в кадре тело уведомления по `page`-пробе, личных адресов нет; кадр снят вручную. Файл **заменён 2026-11-10** кадром нового шаблона (строка ниже) — здесь описан кадр от 08.11 |
 | 2026-11-08 | доставка в приёмник | `/timeline`, `alertsink_*` | 4 уведомления: 2 × `Watchdog` (`none`), `EmailProbePage` (`page`, пришёл через catch-all), `EmailProbeTicket` (`ticket`) |
 | 2026-11-08 | Loki ruler: загрузка правила | `helmfile apply -l name=loki` (ревизия 4), `/prometheus/api/v1/rules` Loki (порт 3100) | группа `demo-api-logs`, файл `demo-api-5xx.yaml`, `interval: 60`, правило `DemoApi5xxFromLogs` `health: ok`, метки `severity=ticket`, `service=demo-api`; рестарт пода Loki прошёл без ошибок старта |
 | 2026-11-08 | Loki ruler: оценка и путь до Alertmanager | `/metrics` Loki, `/config` Loki | `loki_prometheus_rule_evaluations_total{rule_group="…;demo-api-logs"} = 2`, `…_failures_total = 0`; `ruler.alertmanager_url` = Service Alertmanager, `enable_api: true`, `storage.local.directory: /etc/loki/rules`, `rule_path: /tmp/loki-rules`; `loki_prometheus_notifications_alertmanagers_discovered{alertmanager="…/api/v2/alerts"} = 1`, `sent_total = 0` (гореть нечему) |
@@ -237,40 +237,40 @@ rules` — `SUCCESS`. Чарты снова из локальных копий (
 | 2026-11-10 | арифметика в шаблонах Alertmanager | локальный рендер шаблона пакетом `alertmanager/template` версии `v0.34.1` (`go run`) | text и html собираются, `.StartsAt.UnixMilli` = `1794309993000`, `tz` даёт `10.11.2026 14:26:33 MSK`; `{{ toDuration "-15m" }}` → `function "toDuration" not defined` — «startsAt минус for» вычислить нечем |
 | 2026-11-10 | параметры URL Grafana 13.2.4 | бандлы из `/public/build/*.js` (`grep`) | `viewPanel` (8 вхождений) и `time.window` присутствуют в отданных чанках — ссылка «окно инцидента» опирается на документированный формат `time`+`time.window` |
 | 2026-11-10 | deep link из письма и аутентификация UI | `curl -o /dev/null -w '%{redirect_url}'` | `302 → /login?redirectTo=%2Fd%2Fdemo-red%3FviewPanel%3D5%26time%3D…` — после входа человек попадает на нужный вид; Grafana требует логин (`/api/dashboards/uid/demo-red` → 401), Prometheus и Alertmanager — без аутентификации |
-| 2026-11-10 | шаблон письма в живом контуре | `kubectl apply -f rules/demo-slo-alerts.yaml -f rules/meta.yaml`; JSON6902-патч `emailConfigs[0].{text,html}` на живом `AlertmanagerConfig` (адреса и Secret не тронуты); `POST /api/v2/alerts`; `/metrics` Alertmanager, `/timeline` sink | после apply правила отдают новые анкоры и `logs_url` (`/api/v1/rules`: `slodemoavailabilityburnfast`, `logs_url: да`), у meta-сторожей `logs_url` нет; `alertmanager_config_last_reload_successful = 1`, в сгенерированном конфиге шаблон есть (`grep` «Ранбук: пошаговая диагностика» = 1, `time.window=1800000` = 2); проба `EmailProbePage` (`page`) → `alertmanager_notifications_total{integration="email"} = 1`, `increase(failed_total{integration="email"}[10m]) = 0`, запись в `/timeline` `12:55:14Z` со `starts_at 12:55:02Z` (письмо ушло и в sink по `continue`); вид и вручение письма проверяет владелец |
+| 2026-11-10 | шаблон письма в живом контуре | `kubectl apply -f rules/demo-slo-alerts.yaml -f rules/meta.yaml`; JSON6902-патч `emailConfigs[0].{text,html}` на живом `AlertmanagerConfig` (адреса и Secret не тронуты); `POST /api/v2/alerts`; `/metrics` Alertmanager, `/timeline` sink | после apply правила отдают новые анкоры и `logs_url` (`/api/v1/rules`: `slodemoavailabilityburnfast`, `logs_url: да`), у meta-сторожей `logs_url` нет; `alertmanager_config_last_reload_successful = 1`, в сгенерированном конфиге шаблон есть (`grep` «Ранбук: пошаговая диагностика» = 1, `time.window=1800000` = 2); проба `EmailProbePage` (`page`) → `alertmanager_notifications_total{integration="email"} = 1`, `increase(failed_total{integration="email"}[10m]) = 0`, запись в `/timeline` `12:55:14Z` со `starts_at 12:55:02Z` (письмо ушло и в sink по `continue`); вид и вручение письма проверены вручную |
 | 2026-11-10 | свои info-алерты → `ticket` в живом кластере | `kubectl apply -f rules/pipeline.yaml -f rules/meta.yaml` (+ `rules/notifications.yaml`), `/api/v1/rules`, `prometheus_rule_group_rules` | `LokiNotIngesting` и `SloDemoNoTraffic` — `severity=ticket`, `health=ok`, `lastError` нет; `ALERTS` по ним пусто; своих `info` не осталось (23 `ticket`, 4 `page`, 27 алертов). Побочно: `PrometheusRule demo-alerting-path` в кластере **отсутствовал** (три heartbeat-правила были только в git) — применён, групп проекта стало 11 вместо 10 |
-| 2026-11-10 | ротация пароля SMTP | `kubectl -n monitoring get secret alertmanager-smtp -o jsonpath='{.metadata.managedFields}'`, `alertmanager_config_last_reload_success_timestamp_seconds` | до ротации в Secret была одна запись `kubectl-create` (2026-11-08) и конфиг перезагружался 12:54Z — то есть в кластере лежал **старый** пароль, хотя у провайдера он уже был сменён; после `create … --dry-run=client \| kubectl apply -f -` (владелец) появилась запись `kubectl-client-side-apply` 14:11:59Z, перезагрузка конфига 14:13:16Z, `last_reload_successful = 1` |
-| 2026-11-10 | маршрут и письмо (приёмка v1.1) | `POST /api/v2/alerts` через port-forward Alertmanager, `/metrics` Alertmanager, `/timeline` sink, `curl …/api/v2/status` | дерево в живом конфиге: `alertname=~"AlertSink.*"` → `email` (`continue`), `severity=~"page\|critical"` → `email` (`continue`), `severity=~"ticket\|info\|warning\|none"` → `alert-sink`, catch-all → `alert-sink`. Проба `page` (`AcceptanceProbePage`): `email` 2 → 3, `failed_total{integration="email"}` = 0 и `increase(…[15m])` = 0, `AlertmanagerFailedReload` не горит, запись в `/timeline` 14:26:22.979Z; проба `ticket` (`AcceptanceProbeTicket`) — запись в `/timeline` есть, счётчик `email` не изменился. **Найдено расхождение**: в живом `AlertmanagerConfig` отсутствовала ветка `AlertSink*` → `email` (3 маршрута вместо 4 в git) — применён JSON6902-патч, перезагрузка 14:42:13Z; проба `AlertSinkProbePhase83` (`severity=ticket`, имя под шаблон `AlertSink.*`) дала `email` 6 → 7 **и** запись в `/timeline` — сигнал о поломке пути доходит до человека |
-| 2026-11-10 | дрилл `errors` (приёмка v1.1) | `./drills/errors.sh` (toxiproxy `reset_peer`), `/timeline` sink, `evidence/2026-11-10-errors.json` | `result: passed`, 8 утверждений; доля ok упала до 0 (`ratio_5m` 1 → 0,43 → 0), `SloDemoAvailabilityBurnFast` (`page`) доставлен в 14:35:32Z при инъекции в 14:26:53Z — **`starts_at` = 14:35:22,127Z, то есть FiredAt, а не начало инъекции** (закрывает «подтверждено только кодом»); реакция 519 с (порог 900), после снятия токсина `resolved` в 14:40:02Z, восстановление 268 с (порог 600), `ratio_5m` вернулась к 1. Письма (счётчик `alertmanager_notifications_total{integration="email"}` по шагам): 4 → 5 на `firing` в 14:36Z и 5 → 6 на `resolved` в 14:40Z при `failed_total = 0` — ветка `sendResolved` у e-mail проверена живым алертом, а не пробой |
+| 2026-11-10 | ротация пароля SMTP | `kubectl -n monitoring get secret alertmanager-smtp -o jsonpath='{.metadata.managedFields}'`, `alertmanager_config_last_reload_success_timestamp_seconds` | до ротации в Secret была одна запись `kubectl-create` (2026-11-08) и конфиг перезагружался 12:54Z — то есть в кластере лежал **старый** пароль, хотя у провайдера он уже был сменён; после `create … --dry-run=client \| kubectl apply -f -` (вручную) появилась запись `kubectl-client-side-apply` 14:11:59Z, перезагрузка конфига 14:13:16Z, `last_reload_successful = 1` |
+| 2026-11-10 | маршрут и письмо (финальная проверка v1.1) | `POST /api/v2/alerts` через port-forward Alertmanager, `/metrics` Alertmanager, `/timeline` sink, `curl …/api/v2/status` | дерево в живом конфиге: `alertname=~"AlertSink.*"` → `email` (`continue`), `severity=~"page\|critical"` → `email` (`continue`), `severity=~"ticket\|info\|warning\|none"` → `alert-sink`, catch-all → `alert-sink`. Проба `page` (`AcceptanceProbePage`): `email` 2 → 3, `failed_total{integration="email"}` = 0 и `increase(…[15m])` = 0, `AlertmanagerFailedReload` не горит, запись в `/timeline` 14:26:22.979Z; проба `ticket` (`AcceptanceProbeTicket`) — запись в `/timeline` есть, счётчик `email` не изменился. **Найдено расхождение**: в живом `AlertmanagerConfig` отсутствовала ветка `AlertSink*` → `email` (3 маршрута вместо 4 в git) — применён JSON6902-патч, перезагрузка 14:42:13Z; проба с `severity=ticket` и именем под шаблон `AlertSink.*` дала `email` 6 → 7 **и** запись в `/timeline` — сигнал о поломке пути доходит до человека |
+| 2026-11-10 | дрилл `errors` (финальная проверка v1.1) | `./drills/errors.sh` (toxiproxy `reset_peer`), `/timeline` sink, `evidence/2026-11-10-errors.json` | `result: passed`, 8 утверждений; доля ok упала до 0 (`ratio_5m` 1 → 0,43 → 0), `SloDemoAvailabilityBurnFast` (`page`) доставлен в 14:35:32Z при инъекции в 14:26:53Z — **`starts_at` = 14:35:22,127Z, то есть FiredAt, а не начало инъекции** (закрывает «подтверждено только кодом»); реакция 519 с (порог 900), после снятия токсина `resolved` в 14:40:02Z, восстановление 268 с (порог 600), `ratio_5m` вернулась к 1. Письма (счётчик `alertmanager_notifications_total{integration="email"}` по шагам): 4 → 5 на `firing` в 14:36Z и 5 → 6 на `resolved` в 14:40Z при `failed_total = 0` — ветка `sendResolved` у e-mail проверена живым алертом, а не пробой |
 | 2026-11-10 | сторож правила Loki ruler: `LokiRulerRulesMissing` | удалён ключ `demo-api-5xx.yaml` из ConfigMap `loki-rules` (JSON-patch), `/api/v1/rules`, `/timeline`, возврат `kubectl apply -k deploy/loki-rules` | серия `loki_prometheus_rule_evaluations_total{rule_group="…;demo-api-logs"}` пропала → `pending` → `firing` в 14:20:28Z (инъекция 14:07:30Z: сначала ~5 мин до исчезновения серии, затем `for: 10m`), запись в `/timeline` 14:20:38Z (`severity=ticket`), возврат ConfigMap — `resolved` в 14:22:28Z, доставка 14:22:38Z; серия вычислений вернулась (`count = 1`), `health: ok`. Второй сторож `LokiRulerEvaluationFailing` живьём **не проверялся** — только `promtool`-тест |
 | 2026-11-10 | `ticket` на новом severity: `SloDemoNoTraffic` | `kubectl -n demo scale deploy/demo-load --replicas=0`, `/api/v1/rules`, `/timeline`, возврат реплик | `pending` с 14:08:52Z, `firing` в 14:23:52Z (инъекция 14:07:37Z, `for: 15m` — сходится), доставка в `/timeline` 14:24:02Z, `resolved` после возврата реплик в 14:25:22Z, доставка 14:25:32Z; `email` 2 → 2 — в почту **не** ушло, как и должно для `ticket`; ни один `page` за окно не загорелся (`ALERTS{alertstate="firing",severity="page"}` за час — пусто), трафик после возврата 1,43 rps |
 | 2026-11-10 | heartbeat пути: опорные серии | `/api/v1/rules`, `up{job="alert-sink"}`, `alertsink_last_notification_timestamp_seconds` | три правила группы `demo-alerting-path.heartbeat` — `health: ok`; `up{job="alert-sink"} = 1`; `alertsink_last_notification_timestamp_seconds` = 14:42:57Z (> 0, обновился после доставок). **`firing` самих heartbeat-правил не проверялся**: нужна 5,5-часовая тишина маршрута — логика покрыта `promtool`, живьём проверены только опорные серии |
-| 2026-11-10 | доступ к UI и ссылки | `curl -H 'Host: …'`, `curl -o /dev/null -w '%{redirect_url}'`, `api.github.com/repos/…` | Prometheus 302 → `/query`, Alertmanager 200, Grafana `/login` 200; deep link `/d/notifications` → 302 на `/login?redirectTo=%2Fd%2Fnotifications…`; `HEAD` на Prometheus/Alertmanager даёт 405 — проверять надо `GET`. **Репозиторий на GitHub отдаёт 404 без авторизации** — ссылки `runbook_url` из писем у постороннего пока не открываются: публикация репозитория — действие владельца (`docs/publish.md`) |
+| 2026-11-10 | доступ к UI и ссылки | `curl -H 'Host: …'`, `curl -o /dev/null -w '%{redirect_url}'`, `api.github.com/repos/…` | Prometheus 302 → `/query`, Alertmanager 200, Grafana `/login` 200; deep link `/d/notifications` → 302 на `/login?redirectTo=%2Fd%2Fnotifications…`; `HEAD` на Prometheus/Alertmanager даёт 405 — проверять надо `GET`. **Репозиторий на GitHub отдаёт 404 без авторизации** — на момент проверки репозиторий был приватным, поэтому ссылки `runbook_url` из писем у постороннего не открывались |
 | 2026-11-10 | реальная поломка пути уведомлений: `AlertSinkTargetMissing` | `kubectl -n demo scale deploy/alert-sink --replicas=0`, `/api/v1/rules` (pending/firing), `/api/v2/alerts` Alertmanager (состояние и получатели), `/metrics` Alertmanager, `/timeline` после возврата | реплика 0 в 15:37:52Z, `up{job="alert-sink"}` исчез; `pending` с 15:39:08Z → `firing` 15:49:08Z — ровно 10 минут, как `for: 10m`. В Alertmanager алерт был `active` с получателями **`email` и `alert-sink`**: сигнал о поломке пути ушёл в почту веткой `alertname=~"AlertSink.*"`, а не умер вместе с путём (это тот самый маршрут, который отсутствовал в кластере до сегодняшнего патча). `alertmanager_notifications_total{integration="email"}` 10 → 11 (firing) → 12 (resolved), `failed_total{integration="email"} = 0`. Возврат реплики — под поднялся в 15:49:17Z, `resolved` доставлен в 15:50:18Z, в `/timeline` обе записи на месте. Честная оговорка: `webhook_failed_total` остался 0 — первая попытка Alertmanager после `group_wait` пришлась уже на живой sink, так что очередь ретраев к лежащему приёмнику этой пробой **не проверена** |
-| 2026-11-10 | время алерта в дашборде «Уведомления» | `npm test` (alert-sink), `./scripts/check.sh`, `docker build` + `./scripts/import-image.sh` (`alert-sink:47e0e13`), `./scripts/deploy.sh` (адреса маршрута прочитаны из живого `AlertmanagerConfig`), `POST /api/v2/alerts`, `/metrics` и `/timeline` sink, Prometheus `/api/v1/query`, лог sidecar Grafana | дефект, найденный владельцем в UI: `alertsink_alert_events_total` не несёт времени события, и табличный instant-запрос показывал в `Time` момент запроса. Добавлена гейдж `alertsink_alert_start_timestamp_seconds{alertname,status}` = `startsAt` из payload (максимум по паре; без `startsAt` — время приёма), скрыта колонка `Time`, рядом панель «Начало алерта по паре» (секунды ×1000 под `dateTimeAsIso`). Живая проба `VerifyAlertStartMetric` (`severity=none`, `startsAt` 16:53:08Z, `endsAt` 17:04:39Z): `firing` в `/timeline` 17:03:10.985Z, `resolved` 17:05:11.034Z, обе записи дошли по маршруту Alertmanager → sink; в Prometheus `alertsink_alert_start_timestamp_seconds{alertname="VerifyAlertStartMetric",status="firing"} = 1794329588` при `time() - метрика` ≈ 677 с — колонка показывает начало алерта, а не «сейчас». Провижининг: `Writing /tmp/dashboards/notifications.json (ascii)` и `Dashboards config reloaded` (200), `provisioning.dashboard` без ошибок, в живом ConfigMap 8 панелей. Через три минуты пришло настоящее уведомление: `Watchdog` (`firing`) в `/timeline` 17:06:09.394Z, `startsAt` 15:05:40Z → `alertsink_alert_start_timestamp_seconds{alertname="Watchdog",status="firing"} = 1794301540.484`, то есть панель живая на реальном трафике, а не только на пробе. Вид панели глазами не проверен — Grafana требует логин |
-| 2026-11-10 | скриншоты для README | просмотр трёх файлов из `docs/images/`, скан ворот по трекаемому тексту | `demo-red.png` (1057×622, окно 1 час: всплеск доли ошибок от дрилла `errors` и восстановление, лог-панель непустая), `slo-demo.png` (1013×628, окно 6 часов: четыре `stat`, оба burn rate, таблица разбивки), `alert-email.png` (833×248, тело письма после правки шаблона: одна ссылка на Alertmanager, MSK и UTC, дубля нет). В кадрах нет IP, адресов почты и имён нод — только имена сервисов кластера; скан ворот зелёный. Снимал и добавлял владелец, коммит `docs(images)` (`70e3c4f`) |
+| 2026-11-10 | время алерта в дашборде «Уведомления» | `npm test` (alert-sink), `./scripts/check.sh`, `docker build` + `./scripts/import-image.sh` (`alert-sink:47e0e13`), `./scripts/deploy.sh` (адреса маршрута прочитаны из живого `AlertmanagerConfig`), `POST /api/v2/alerts`, `/metrics` и `/timeline` sink, Prometheus `/api/v1/query`, лог sidecar Grafana | дефект, найденный при просмотре UI: `alertsink_alert_events_total` не несёт времени события, и табличный instant-запрос показывал в `Time` момент запроса. Добавлена гейдж `alertsink_alert_start_timestamp_seconds{alertname,status}` = `startsAt` из payload (максимум по паре; без `startsAt` — время приёма), скрыта колонка `Time`, рядом панель «Начало алерта по паре» (секунды ×1000 под `dateTimeAsIso`). Живая проба `VerifyAlertStartMetric` (`severity=none`, `startsAt` 16:53:08Z, `endsAt` 17:04:39Z): `firing` в `/timeline` 17:03:10.985Z, `resolved` 17:05:11.034Z, обе записи дошли по маршруту Alertmanager → sink; в Prometheus `alertsink_alert_start_timestamp_seconds{alertname="VerifyAlertStartMetric",status="firing"} = 1794329588` при `time() - метрика` ≈ 677 с — колонка показывает начало алерта, а не «сейчас». Провижининг: `Writing /tmp/dashboards/notifications.json (ascii)` и `Dashboards config reloaded` (200), `provisioning.dashboard` без ошибок, в живом ConfigMap 8 панелей. Через три минуты пришло настоящее уведомление: `Watchdog` (`firing`) в `/timeline` 17:06:09.394Z, `startsAt` 15:05:40Z → `alertsink_alert_start_timestamp_seconds{alertname="Watchdog",status="firing"} = 1794301540.484`, то есть панель живая на реальном трафике, а не только на пробе. Вид панели глазами не проверен — Grafana требует логин |
+| 2026-11-10 | скриншоты для README | просмотр трёх файлов из `docs/images/`, скан ворот по трекаемому тексту | `demo-red.png` (1057×622, окно 1 час: всплеск доли ошибок от дрилла `errors` и восстановление, лог-панель непустая), `slo-demo.png` (1013×628, окно 6 часов: четыре `stat`, оба burn rate, таблица разбивки), `alert-email.png` (833×248, тело письма после правки шаблона: одна ссылка на Alertmanager, MSK и UTC, дубля нет). В кадрах нет IP, адресов почты и имён нод — только имена сервисов кластера; скан ворот зелёный. Кадры добавлены в репозиторий коммитом `docs(images)` (`70e3c4f`) |
 | 2026-11-10 | почему на кадре `slo-demo` бюджет 3 % и латентность 97,57 % | `slo:demo_*:ratio_3d`, `histogram_quantile` клиента (`load_request_duration_seconds`) и сервера (`http_request_duration_seconds`), `container_cpu_cfs_throttled_periods_total`, `node_load1` | за 3 суток: доступность 99,05 %, латентность 97,61 % (цель 99 %). Просадки локализованы по 15-минутным окнам: 07.11 15:17–19:03 (97,7 % → 72 %), 09.11 15:33–18:33 (98,8 % → 91 %), 10.11 09:33 (77 %, сразу после старта нод). В эпизоде 09.11 17:48Z клиентская p95 **930 мс** против серверной **6,4 мс**, троттлинг cgroup `demo-load` **23 %** периодов CFS, исходы `timeout` 0,14/с, `node_load1` 0,5 — узел не перегружен, ограничен сам генератор; значит SLI считает задержку, которую произвёл клиент, а не сервис (это и есть причина, по которой в проекте появилось правило `LoadGeneratorThrottled`). Оно добавлено 2026-11-09 21:55 MSK, то есть **позже** эпизодов 07.11 и 09.11 — сработать там оно не могло; сегодняшний провал 09:33 (клиент p95 456 мс при троттлинге 0 %) к троттлингу не относится, причина не установлена (холодный старт после загрузки нод). Бюджет доступности: один дрилл `errors` (16 минут почти 100 % ошибок) съедает ≈37 % трёхдневного бюджета, остальное — другие дриллы и окна с `timeout` |
 | 2026-11-10 | полный `deploy.sh` после правки шаблона письма | `IMAGE_TAG=de1d9ba ./scripts/deploy.sh` с e-mail env, прочитанными из живого `AlertmanagerConfig` (значения не печатались); лог `.tmp/deploy-full-2026-11-10.log` | exit 0. Apply без пересоздания подов: `restarts` у `alert-sink`/`demo-api`/`demo-load`/`toxiproxy` не изменились. Цели `demo-api 2`, `demo-load 1`, `alert-sink 1`, ok-трафик 4,99 rps; гейт «маршрут активен» и `last_reload_successful` — успешны; групп правил проекта 11 (ожидалось 11); серии `slo:*` пишутся; `SloAlertRulesAbsent` ложных `ALERTS` не даёт. В активном конфиге Alertmanager дерево из четырёх child-route (включая `alertname=~"AlertSink.*"` → `email`) — расхождение фазы 8 закрыто, git и кластер сходятся. Шаблон письма в живом объекте: подпись «Alertmanager (силенсы, статус)» — 1, `href="{{ .ExternalURL }}"` — 1, ссылка **после** `range .Alerts`; Alertmanager перезагрузил конфиг `16:44:39Z`. В `firing` только `Watchdog` (`severity: none`). Свои объекты: 6 `PrometheusRule`, 3 дашборда |
-| 2026-11-10 | дашборд «Уведомления»: одна таблица вместо двух | `kubectl apply -k deploy/dashboards`, лог sidecar `grafana-sc-dashboard`, живой ConfigMap `notifications`, `./scripts/check.sh` | по просьбе владельца таблица «Алерты с запуска пода» удалена, «Начало алерта по паре» растянута на её место (`x 16→8`, `w 8→16`); панелей стало 7 (`stat` ×4, `bargauge`, таблица времени, журнал Loki). Sidecar записал файл и получил `Dashboards config reloaded` (200), `provisioning.dashboard` без ошибок; счётчик `alertsink_alert_events_total` в дашборде больше не выводится — он остался в `/metrics` и `/timeline`, о чём сказано в описании панели и в runbook. Зелёные ворота: `дашборды: файлов 3, панелей 19`. Вид панели глазами не проверен — Grafana требует логин |
-| 2026-11-10 | покой контура после приёмки | `ALERTS`, `sum(increase(alertmanager_notifications_failed_total[1h]))`, `loki_prometheus_rule_evaluations_total` | в `firing` только `Watchdog` (`severity: none`), отказов отправки — 0, серии сторожей вернулись; шум стенда отдельно: в 13:43:37–13:43:42 kubelet перезапустил контейнеры `alert-sink`/`demo-api`/`demo-load` на одной ноде по liveness-пробе (`context deadline exceeded`, `exitCode 137`), OOM нет (пик 34 МиБ из 64 МиБ), `node_load1` в те же минуты 1,27 — совпало с прогоном офлайн-ворот на той же физической машине |
+| 2026-11-10 | дашборд «Уведомления»: одна таблица вместо двух | `kubectl apply -k deploy/dashboards`, лог sidecar `grafana-sc-dashboard`, живой ConfigMap `notifications`, `./scripts/check.sh` | по итогам просмотра в UI таблица «Алерты с запуска пода» удалена, «Начало алерта по паре» растянута на её место (`x 16→8`, `w 8→16`); панелей стало 7 (`stat` ×4, `bargauge`, таблица времени, журнал Loki). Sidecar записал файл и получил `Dashboards config reloaded` (200), `provisioning.dashboard` без ошибок; счётчик `alertsink_alert_events_total` в дашборде больше не выводится — он остался в `/metrics` и `/timeline`, о чём сказано в описании панели и в runbook. Зелёные ворота: `дашборды: файлов 3, панелей 19`. Вид панели глазами не проверен — Grafana требует логин |
+| 2026-11-10 | покой контура после финальной проверки | `ALERTS`, `sum(increase(alertmanager_notifications_failed_total[1h]))`, `loki_prometheus_rule_evaluations_total` | в `firing` только `Watchdog` (`severity: none`), отказов отправки — 0, серии сторожей вернулись; шум стенда отдельно: в 13:43:37–13:43:42 kubelet перезапустил контейнеры `alert-sink`/`demo-api`/`demo-load` на одной ноде по liveness-пробе (`context deadline exceeded`, `exitCode 137`), OOM нет (пик 34 МиБ из 64 МиБ), `node_load1` в те же минуты 1,27 — совпало с прогоном офлайн-ворот на той же физической машине |
 
 Как проверить это повторно (временное правило по реальному трафику, без выдуманных строк
 и без правки кода) — раздел «Правила Loki ruler» в `docs/runbook.md`.
 
 ## Ещё не подтверждено живьём
 
-Состояние после приёмки v1.1 (2026-11-10). Закрыто в этот день: живой `page`-алерт от SLO,
+Состояние после финальной проверки v1.1 (2026-11-10). Закрыто в этот день: живой `page`-алерт от SLO,
 `startsAt = FiredAt`, `resolved`-ветка e-mail, доставка `ticket` на новом severity, сторож
 `LokiRulerRulesMissing`, маршрут `AlertSink.*` → `email`, вручение письма и скриншоты
 (см. строки таблицы выше).
 
 - **Вид письма и работа его ссылок** — единственное, что осталось от блока «вручение»:
-  письмо дошло до ящика (кадр `docs/images/alert-email.png` снят владельцем 2026-11-10),
+  письмо дошло до ящика (кадр `docs/images/alert-email.png` снят 2026-11-10),
   вид тела проверен по кадру — ссылка на Alertmanager одна, время в MSK и UTC, дубля
   «Стенд: …» нет. По клику не проверены: переход на GitHub-анкор ранбука (репозиторий
   пока приватный, см. пункт «публикация»), deep link в Grafana за логином
-  (`viewPanel`/`time.window`), папка «Спам»; вид дашборда «Уведомления» глазами — тоже
-  владелец;
+  (`viewPanel`/`time.window`), папка «Спам»; вид дашборда «Уведомления» глазами тоже
+  не проверен — для этого нужен вход в Grafana;
 - **`heartbeat` пути уведомлений**: `AlertSinkTargetMissing` проверен живьём 2026-11-10
   (погашенный sink → `firing` через 10 минут → письмо в почту, см. строку таблицы выше).
   Оставшиеся два — `AlertSinkHeartbeatMissing` (тишина дольше 5,5 ч) и `AlertSinkNeverReceived`
@@ -289,15 +289,15 @@ rules` — `SUCCESS`. Чарты снова из локальных копий (
   соединение **до** приложения, в логах остаются `status: 200` и `request_aborted` (499) —
   ни то, ни другое под условие `status >= 500` не попадает (проверено 2026-11-10 ещё раз:
   правило при живом дрилле молчало, как и предсказано). Чтобы правило горело на настоящем
-  5xx, нужна инъекция 5xx в `demo-api` (отдельный маршрут) и свой дрилл — это записано в
-  «Идеи после v1.1»;
+  5xx, нужна инъекция 5xx в `demo-api` (отдельный маршрут) и свой дрилл; в текущую
+  версию это не входит;
 - **глазами**: вид дашборда «Уведомления», клик по `time`/`time.window` и по
   процент-кодированному кириллическому анкору — нужны вход в Grafana и клик по ссылке из
-  письма, это делает владелец (тело письма уже просмотрено по кадру, см. пункт выше);
-- **публикация**: `api.github.com/repos/…` отвечает 404 без авторизации — репозиторий пока
-  приватный, поэтому абсолютные `runbook_url` из писем у постороннего не открываются.
-  Публикация репозитория, тег `v1.1` и прогон `ci.yml` на GitHub — действия владельца
-  (`docs/publish.md`).
+  письма; тело письма уже просмотрено по кадру (см. пункт выше);
+- **публикация**: на момент проверки `api.github.com/repos/…` отвечал 404 без авторизации —
+  репозиторий был приватным, поэтому абсолютные `runbook_url` из писем у постороннего
+  не открывались. После публикации этот пункт снимается и проверяется одним кликом по
+  ссылке «Ранбук» в письме.
 
 Дополнительно известно и не проверяется: slow-burn алерт (1x / 3d) требует трёх суток
 непрерывных данных — его логика покрыта `promtool test rules`, живой прогон не планируется.
