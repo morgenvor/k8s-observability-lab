@@ -8,7 +8,7 @@ repositories:
     url: https://grafana.github.io/helm-charts
 
 releases:
-  # Стек мониторинга лабы: уже развёрнут (rev5), values принадлежат проекту.
+  # Стек мониторинга: values принадлежат проекту, первый в порядке установки.
   # Локальная проверка без кластера: helmfile template -l name=monitoring
   - name: monitoring
     namespace: monitoring
@@ -20,7 +20,9 @@ releases:
 
   # Логи: Loki SingleBinary на своём PVC 5Gi и Alloy DaemonSet, который читает
   # логи подов через Kubernetes API. Версии — последние на 2026-11-04 из `helm search
-  # repo grafana/... --versions`: 7.5.0 (Loki 3.6.16) и 1.15.0 (Alloy v1.21.3).
+  # repo grafana/... --versions`: чарт 7.5.0 и чарт Alloy 1.15.0 (app v1.21.3).
+  # Образ Loki пинится отдельно — 3.6.11 в helm/values/loki.yaml (appVersion чарта
+  # 3.6.16, но в лабе импортирован 3.6.11; смена тега — отдельный шаг с импортом).
   # Namespace общий с monitoring: Alloy нужен доступ к API (RBAC из чарта), а Loki
   # адресуется как loki.monitoring.svc:3100 — и из Grafana, и из loki.write.
   - name: loki
