@@ -93,15 +93,19 @@ Issues можно оставить включёнными.
 
 ## 4. Защита `main` `[владелец]`
 
-Минимально полезный набор: обязательный зелёный `ci` перед слиянием. Имена проверок —
-это имена джобов из `.github/workflows/ci.yml`: `offline checks` и `docker build`.
+Минимально полезный набор: обязательный зелёный `ci` перед слиянием. Имя проверки —
+это имя джоба из `.github/workflows/ci.yml`; джоб один — `offline checks`, и он же
+собирает образы (внутри `--smoke`), поэтому сборки Dockerfile отдельной проверкой
+не дублируются. Если в защите остался контекст `docker build` от прежней версии
+workflow, GitHub будет ждать проверку, которая больше не приходит, и PR повиснет
+в «Expected» — контекст нужно заменить, а не оставить рядом.
 
 ```bash
 cat > /tmp/protection.json <<'JSON'
 {
   "required_status_checks": {
     "strict": true,
-    "contexts": ["offline checks", "docker build"]
+    "contexts": ["offline checks"]
   },
   "enforce_admins": false,
   "required_pull_request_reviews": null,
